@@ -1,0 +1,20 @@
+# Content hashes and prose in vendored Neon skill docs. Not credentials.
+.agents/skills/neon-postgres/references/lakebase-search-drizzle.md:generic-crypto-seed-phrase:1
+.agents/skills/neon-realtime/references/reactivity.md:generic-crypto-seed-phrase:231
+.agents/skills/neon-realtime/references/reactivity.md:ethereum-private-key:1
+.agents/skills/neon-realtime/references/subscribing.md:ethereum-private-key:1
+.agents/skills/neon-realtime/references/subscribing.md:generic-crypto-seed-phrase:75
+.agents/skills/neon-realtime/references/subscribing.md:generic-crypto-seed-phrase:83
+.agents/skills/neon-realtime/references/subscribing.md:generic-crypto-seed-phrase:129
+.agents/skills/neon-realtime/references/mutations.md:ethereum-private-key:1
+.agents/skills/neon-realtime/references/queries.md:ethereum-private-key:1
+.agents/skills/neon-realtime/references/ssr.md:ethereum-private-key:1
+.agents/skills/neon-realtime/references/ssr.md:generic-crypto-seed-phrase:461
+.agents/skills/neon-realtime/references/ssr.md:generic-crypto-seed-phrase:524
+skills-lock.json:ethereum-private-key:8
+skills-lock.json:ethereum-private-key:14
+skills-lock.json:ethereum-private-key:20
+skills-lock.json:ethereum-private-key:26
+skills-lock.json:ethereum-private-key:32
+skills-lock.json:ethereum-private-key:38
+skills-lock.json:ethereum-private-key:44

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="720" viewBox="0 0 1100 720" role="img" aria-labelledby="title desc">
+  <title id="title">ShopBridge architecture</title>
+  <desc id="desc">Buyers, sellers and support use a React SPA on Render. The Node API uses Neon Postgres for orders and Nexconn Chat and Call for conversations.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F7F3EC"/>
+      <stop offset="100%" stop-color="#EFE8DC"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 1.5 L9 5 L0 8.5 Z" fill="#5C5346"/>
+    </marker>
+    <filter id="soft" x="-8%" y="-8%" width="116%" height="116%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#2A241C" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <rect width="1100" height="720" fill="url(#bg)"/>
+
+  <text x="56" y="52" font-family="Georgia, 'Times New Roman', serif" font-size="28" font-weight="600" fill="#1F1A14">ShopBridge architecture</text>
+  <text x="56" y="78" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#6B6358">Every order is one Nexconn conversation - buyers, sellers, and support</text>
+
+  <g filter="url(#soft)">
+    <rect x="56" y="110" width="200" height="150" rx="14" fill="#FFFCF7" stroke="#D9D0C3"/>
+    <text x="156" y="140" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.08em" fill="#8A7F70">USERS</text>
+    <text x="156" y="172" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#1F1A14">Buyer</text>
+    <text x="156" y="198" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#1F1A14">Seller</text>
+    <text x="156" y="224" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#1F1A14">Support agent</text>
+  </g>
+
+  <g filter="url(#soft)">
+    <rect x="320" y="110" width="240" height="150" rx="14" fill="#FFFCF7" stroke="#D9D0C3"/>
+    <text x="440" y="140" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.08em" fill="#8A7F70">WEB APP</text>
+    <text x="440" y="175" text-anchor="middle" font-family="Georgia, serif" font-size="20" fill="#1F1A14">React + Vite SPA</text>
+    <text x="440" y="204" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#5C5346">Shop - Orders - Inbox - Queue</text>
+    <text x="440" y="228" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#5C5346">Custom chat UI on Chat SDK</text>
+  </g>
+
+  <g filter="url(#soft)">
+    <rect x="630" y="110" width="240" height="150" rx="14" fill="#FFFCF7" stroke="#D9D0C3"/>
+    <text x="750" y="140" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.08em" fill="#8A7F70">API</text>
+    <text x="750" y="175" text-anchor="middle" font-family="Georgia, serif" font-size="20" fill="#1F1A14">Node.js server</text>
+    <text x="750" y="204" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#5C5346">Auth - Orders - Products</text>
+    <text x="750" y="228" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#5C5346">Channel create / join / tokens</text>
+  </g>
+
+  <g filter="url(#soft)">
+    <rect x="900" y="130" width="144" height="110" rx="14" fill="#2F3A56" stroke="#2F3A56"/>
+    <text x="972" y="175" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.1em" fill="#C9D2E8">HOST</text>
+    <text x="972" y="205" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#F7F3EC">Render</text>
+    <text x="972" y="228" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="12" fill="#C9D2E8">Free web service</text>
+  </g>
+
+  <line x1="256" y1="185" x2="314" y2="185" stroke="#5C5346" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <line x1="560" y1="185" x2="624" y2="185" stroke="#5C5346" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <line x1="870" y1="185" x2="894" y2="185" stroke="#5C5346" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <text x="285" y="172" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#8A7F70">HTTPS</text>
+  <text x="592" y="172" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#8A7F70">/api</text>
+
+  <text x="56" y="320" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.1em" fill="#8A7F70">DATA and MESSAGING</text>
+
+  <g filter="url(#soft)">
+    <rect x="56" y="340" width="460" height="170" rx="14" fill="#FFFCF7" stroke="#D9D0C3"/>
+    <rect x="56" y="340" width="8" height="170" rx="4" fill="#0EA5A0"/>
+    <text x="86" y="372" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.08em" fill="#0B7F7A">NEON POSTGRESQL</text>
+    <text x="86" y="402" font-family="Georgia, serif" font-size="20" fill="#1F1A14">Orders, products, users, sessions</text>
+    <text x="86" y="432" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#5C5346">- Catalogue, cart, checkout, order status</text>
+    <text x="86" y="456" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#5C5346">- Support cases, offers, shipment fields</text>
+    <text x="86" y="480" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#5C5346">- channel_id links each order to Nexconn</text>
+  </g>
+
+  <g filter="url(#soft)">
+    <rect x="560" y="340" width="484" height="170" rx="14" fill="#FFFCF7" stroke="#D9D0C3"/>
+    <rect x="560" y="340" width="8" height="170" rx="4" fill="#3D4F8C"/>
+    <text x="590" y="372" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.08em" fill="#3D4F8C">NEXCONN</text>
+    <text x="590" y="402" font-family="Georgia, serif" font-size="20" fill="#1F1A14">Chat SDK + Call SDK</text>
+    <text x="590" y="432" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#5C5346">- Group channel per order, history, translation</text>
+    <text x="590" y="456" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#5C5346">- Media, receipts, typing, custom order cards</text>
+    <text x="590" y="480" font-family="Helvetica, Arial, sans-serif" font-size="14" fill="#5C5346">- Voice / video calls (Call SDK, optional A/V)</text>
+  </g>
+
+  <path d="M720 260 L720 310 L280 310 L280 334" fill="none" stroke="#5C5346" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <path d="M780 260 L780 310 L800 310 L800 334" fill="none" stroke="#5C5346" stroke-width="1.75" marker-end="url(#arrow)"/>
+  <text x="340" y="302" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#8A7F70">DATABASE_URL</text>
+  <text x="860" y="302" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#8A7F70">App Key - server secret - tokens</text>
+
+  <path d="M440 260 L440 300 L700 300" fill="none" stroke="#3D4F8C" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="520" y="292" font-family="Helvetica, Arial, sans-serif" font-size="11" fill="#3D4F8C">SDK realtime (messages / calls)</text>
+
+  <g filter="url(#soft)">
+    <rect x="56" y="548" width="988" height="120" rx="14" fill="#1F1A14"/>
+    <text x="86" y="586" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="0.1em" fill="#C4B8A8">ORDER FLOW</text>
+    <text x="86" y="618" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#F7F3EC">Checkout - API creates order + Nexconn group channel - buyer and seller chat with live translation - support joins same channel with full history</text>
+    <text x="86" y="646" font-family="Helvetica, Arial, sans-serif" font-size="13" fill="#A89C8C">Production: Render Free - Neon Free - Nexconn Chat (required) - Call SDK integrated - App Secret never leaves the server</text>
+  </g>
+</svg>
