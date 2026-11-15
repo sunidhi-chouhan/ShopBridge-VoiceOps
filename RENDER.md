@@ -1,88 +1,59 @@
-# ShopBridge — Render Free + Neon Free deployment
+# Deploy ShopBridge VoiceOps on Render
 
-Zero-cost demo hosting: **Render Web Service (free)** + **Neon PostgreSQL (free)**.  
-Nexconn Chat remains external (App Key / App Secret in env). **No persistent disk required.**
+One free Node web service plus one free Render Postgres database. `render.yaml` is the Blueprint. Secrets are not in git. Render asks for them when you create the Blueprint.
 
-**Do not paste secrets into git or tickets.**
+The web service and the database must stay in the same region (`singapore` in the Blueprint) so the app can use the database's internal URL. Keep the service at one instance. Voice spend caps are held in memory.
 
-## Architecture
+## 1. Put this file on GitHub
 
-- **Service type:** Web Service (single instance)
-- **Runtime:** Node
-- **Shape:** One process serves Vite `dist/web` and `/api/*`
-- **Persistence:** PostgreSQL via `DATABASE_URL` (Neon)
-- **Chat:** Nexconn SDK (messages not stored in Postgres — only `channel_id` links)
+`render.yaml` has to be on `main` before Render can read it. Commit and push it, then continue below.
 
-## Build & start
+## 2. Create the Blueprint
 
-The GitHub repo is a monorepo. Set **Root Directory** to `chat app` (exact path, including the space).
+1. Render Dashboard → **New** → **Blueprint**.
+2. Connect GitHub if needed, then select `sunidhi-chouhan/ShopBridge-VoiceOps`.
+3. Render reads `render.yaml` and prompts for the secret variables. Fill these in. Do not leave them blank:
 
-| Setting | Value |
+| Prompt | Value |
 | --- | --- |
-| Root Directory | `chat app` |
-| Build Command | `npm ci --include=dev && npm run build` |
-| Start Command | `npm start` |
-| Health Check Path | `/api/health` |
+| `SHOPBRIDGE_DEMO_PASSWORD` | a password you choose |
+| `GEMINI_API_KEY` | primary key from a billing-enabled Google Cloud project |
+| `GEMINI_API_KEY_BACKUP` | key from a different Google Cloud project |
+| `NEXCONN_APP_KEY` | Nexconn Console → Key Management |
+| `NEXCONN_APP_SECRET` | the matching app secret |
 
-`--include=dev` is required because Render sets `NODE_ENV=production` during install and Vite lives in `devDependencies`.
+4. Apply the Blueprint. Render creates `shopbridge` and `shopbridge-db`, sets `DATABASE_URL` from the database, and deploys.
 
-Production **requires** `DATABASE_URL`. The process exits on boot if it is missing when `NODE_ENV=production`. JSON file fallback is **local-only**.
+These are already set in `render.yaml`: Node 22, `NODE_ENV=production`, `SHOPBRIDGE_AUTO_MIGRATE=1`, the Gemini model names, `NEXCONN_API_BASE`, and the voice caps. Do not set `PORT` or `SHOPBRIDGE_ALLOW_RESEED`.
 
-**Do not** set `SHOPBRIDGE_AUTO_MIGRATE=1` on the live service. Neon already has migrations `001`–`003`. Leave auto-migrate unset so boot never applies SQL.
+In the Nexconn console for that app key, turn on translation, pre-join history, and audio/video calling.
 
-## Neon setup
+## 3. Seed once from your laptop
 
-1. Create a free Neon project and copy the connection string (`DATABASE_URL`).
-2. Prefer the pooled connection string if Neon provides one.
-3. SSL is enabled automatically for Neon hosts in the app pool.
-
-### First-time schema + demo data (from your machine)
-
-Never run destructive seed against production. Import the curated local store once:
+`SHOPBRIDGE_AUTO_MIGRATE=1` applies the schema on boot. Demo accounts are loaded separately. Production refuses reseeding, so run this from your machine against the database's **external** URL (database page → Connect → External). Keep the URL in the shell only.
 
 ```bash
-export DATABASE_URL='postgresql://…'   # Neon URL — keep private
+export DATABASE_URL='<render external postgres url>'
+export SHOPBRIDGE_DEMO_PASSWORD='<same password you entered in Render>'
 npm run db:migrate
-npm run db:import:dry                  # review counts/ids (no hashes printed)
-npm run db:import                      # apply once
-npm run db:verify
+npm run seed
 ```
 
-If the database already has rows, import aborts unless you pass `--force` intentionally:
+`npm run seed` also reads `NEXCONN_APP_KEY` and `NEXCONN_APP_SECRET` from your local `.env`. Run it only against this new database. It wipes and reseeds.
 
-```bash
-npx tsx server/db/import-store.ts --apply --force
-```
+## 4. Check
 
-Details: `HOSTED_DEMO_INIT.md`.
+1. Open `https://<your-app>.onrender.com/api/health`. A working deploy returns `{"ok":true,"backend":"postgres",...}`.
+2. Sign in as Seller → Voice → Overview → **Run check**. Database, both Gemini keys, and Nexconn should be OK.
 
-## Environment variable names
+Demo accounts are `buyer@shopbridge.demo`, `seller@shopbridge.demo`, and `support@shopbridge.demo`, all using `SHOPBRIDGE_DEMO_PASSWORD`.
 
-| Name | Purpose |
-| --- | --- |
-| `NODE_ENV` | `production` |
-| `PORT` | Provided by Render |
-| `DATABASE_URL` | Neon Postgres URL (**required**) |
-| `NEXCONN_APP_KEY` | Nexconn app key |
-| `NEXCONN_APP_SECRET` | Server-only secret |
-| `NEXCONN_API_BASE` | Optional |
-| `SHOPBRIDGE_DEMO_PASSWORD` | Optional hackathon password login |
-| `SHOPBRIDGE_ALLOW_RESEED` | **Leave unset** |
-| `SHOPBRIDGE_AUTO_MIGRATE` | **Leave unset** (schema already on Neon) |
-| `SHOPBRIDGE_DEMO_RESET` | Optional `1` to show “Reset demo data” for demo accounts |
-| `SHOPBRIDGE_DATA_DIR` | Not used on Render when Postgres is configured |
+## Free-plan limits
 
-## Health
+- The web service sleeps after about 15 minutes without traffic. The next visit takes about a minute to wake. Open the URL a few minutes before a live demo.
+- A free Render Postgres database expires 30 days after creation, then has a 14-day grace period before Render deletes it. There are no backups on the free database.
+- A workspace can have only one free Postgres database.
 
-`GET /api/health` returns:
+## Build note
 
-- `200` + `{ ok: true, backend: "postgres", database: { ready: true }, nexconn }` when DB is reachable
-- `503` when the database is down or `DATABASE_URL` is missing in production
-
-No connection strings or internal DB errors are exposed in the response body.
-
-## Ops rules
-
-- Instance count **1** (free tier); scale-out needs careful connection limits on Neon free.
-- Do not put `npm run seed` or `demo:prepare` in Start Command.
-- Keep Nexconn Console Translation + pre-join history enabled for the demo App Key.
+The build command keeps `--include=dev` because Vite is a dev dependency and Render installs with `NODE_ENV=production`. Without that flag the build fails with `vite: not found`.

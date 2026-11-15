@@ -29,7 +29,7 @@ Built on the **Nexconn Chat SDK** (`@nexconn/chat` 26.2.1) and **Call SDK** (`@n
 ShopBridge is a single Node.js process that serves the Vite React app (`dist/web`) and the `/api` backend.
 
 - **Local default:** JSON file `data/store.json` (when `DATABASE_URL` is unset).
-- **Hosted / production:** PostgreSQL via `DATABASE_URL` (Neon Free + Render Free — see `RENDER.md`).
+- **Hosted / production:** PostgreSQL via `DATABASE_URL`. Render Free is defined in `render.yaml` (see `RENDER.md`).
 
 ## Local run
 
@@ -82,7 +82,7 @@ Tests never read `.env` and refuse any database that is not on localhost with a 
 
 ## Deploy
 
-See `RENDER.md` (Render Free + Neon Free) and `HOSTED_DEMO_INIT.md` (one-time Postgres import). Do not put secrets in git.
+See `RENDER.md`. `render.yaml` creates the Render web service and Postgres database. Do not put secrets in git.
 
 ## Safety
 
