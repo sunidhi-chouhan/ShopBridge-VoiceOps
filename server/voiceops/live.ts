@@ -305,12 +305,17 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
 
     if (msg.toolCall?.functionCalls) {
       const calls = msg.toolCall.functionCalls as Array<{ id: string; name: string; args?: Record<string, unknown> }>;
-      const responses = [];
-      for (const call of calls) {
+      const respond = async (call: (typeof calls)[number]) => {
         const result = await runAndReport(call.name, call.args ?? {}).catch((error) => ({
           ok: false, status: "failed", message: error instanceof Error ? error.message : "Tool failed.",
         }));
-        responses.push({ id: call.id, name: call.name, response: { output: result } });
+        return { id: call.id, name: call.name, response: { output: result } };
+      };
+      // Read-only lookups do not depend on each other. Writes stay in order so an approval is raised before it can be confirmed.
+      const readsOnly = calls.length > 1 && calls.every((call) => orchestrator.READ_TOOL_NAMES.has(call.name));
+      const responses = readsOnly ? await Promise.all(calls.map(respond)) : [];
+      if (!readsOnly) {
+        for (const call of calls) responses.push(await respond(call));
       }
       toGemini({ toolResponse: { functionResponses: responses } });
     }

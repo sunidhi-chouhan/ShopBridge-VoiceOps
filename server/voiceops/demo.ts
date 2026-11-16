@@ -16,20 +16,21 @@ const BUYERS = [
   { id: "vodbuyer3", name: "Imran Sheikh" },
 ];
 
-type Plan = { no: number; status: string; createdH: number; updatedH: number | null; buyer: number; product: number; qty: number; why: string; room?: boolean };
+type Plan = { no: number; status: string; createdH: number; updatedH: number | null; buyer: number; product: number; qty: number; why: string; room?: boolean; deliver?: boolean };
 export const DEMO_PLAN: Plan[] = [
   { no: 1042, status: "delivered", createdH: 90, updatedH: 48, buyer: 0, product: 0, qty: 1, room: true, why: "Workflow 2: return (delivered 2 days ago, in window)" },
   { no: 1050, status: "shipped", createdH: 40, updatedH: 20, buyer: 1, product: 1, qty: 1, room: true, why: "Workflow 3: cancel blocked, already shipped" },
-  { no: 1051, status: "placed", createdH: 31, updatedH: null, buyer: 2, product: 2, qty: 2, why: "Workflow 1: delayed" },
+  { no: 1051, status: "placed", createdH: 31, updatedH: null, buyer: 2, product: 2, qty: 2, deliver: true, why: "Workflow 1: delayed" },
   { no: 1052, status: "placed", createdH: 27, updatedH: null, buyer: 0, product: 3, qty: 1, why: "Workflow 1: delayed (also sounds like 1042)" },
-  { no: 1053, status: "packed", createdH: 25, updatedH: 24, buyer: 1, product: 4, qty: 1, why: "Workflow 1: delayed, packed but not shipped" },
+  { no: 1053, status: "packed", createdH: 25, updatedH: 24, buyer: 1, product: 4, qty: 1, deliver: true, why: "Workflow 1: delayed, packed but not shipped" },
   { no: 1054, status: "delivered", createdH: 300, updatedH: 280, buyer: 2, product: 5, qty: 1, why: "Policy: return window closed" },
   { no: 1055, status: "placed", createdH: 2, updatedH: null, buyer: 0, product: 6, qty: 1, why: "Fresh order, not delayed" },
 ];
 
 /**
- * `openRoom` (optional) opens the Nexconn order conversation for orders marked `room`, which belong to the
- * real demo buyer (sign in as Buyer to see the seller's messages arrive in the order conversation).
+ * `room` assigns the signed-in demo buyer so they can see that conversation.
+ * `deliver` opens a Nexconn room for the order's own buyer without changing who that buyer is.
+ * A room that fails to open is skipped; the reset still succeeds.
  */
 export async function resetDemoScenario(user: UserRecord, openRoom?: (orderId: string) => Promise<unknown>): Promise<{ orders: number[]; rooms: string[] }> {
   if (!demoEnabled()) throw new HttpError(404, "NOT_FOUND", "Not found.");
@@ -78,7 +79,7 @@ export async function resetDemoScenario(user: UserRecord, openRoom?: (orderId: s
     await client.query("COMMIT");
     const rooms: string[] = [];
     if (openRoom) {
-      for (const o of DEMO_PLAN.filter((x) => x.room)) {
+      for (const o of DEMO_PLAN.filter((x) => x.room || x.deliver)) {
         try {
           await openRoom(`vod${o.no}`);
           rooms.push(`vod${o.no}`);

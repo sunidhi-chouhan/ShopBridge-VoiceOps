@@ -365,6 +365,9 @@ const readTools: Record<string, ReadTool> = {
   },
 };
 
+/** Lookups that do not change data. A batch of only these may run together. */
+export const READ_TOOL_NAMES = new Set(Object.keys(readTools));
+
 async function summaryFor(client: pg.PoolClient, sellerId: string) {
   await ensureOrderNumbers(client, sellerId);
   const orders = (await client.query(`${ORDER_SELECT} WHERE o.seller_id = $1`, [sellerId])).rows.map(normRow);
