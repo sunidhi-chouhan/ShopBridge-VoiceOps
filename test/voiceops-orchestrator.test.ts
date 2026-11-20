@@ -189,4 +189,31 @@ describe("VoiceOps orchestrator (Postgres)", { skip: available ? false : PG_SKIP
     const ov: any = await o.overview(seller);
     assert.ok(ov.activity.blocked > 0 && ov.activity.succeeded > 0 && ov.activity.human > 0);
   });
+
+  it("prices time saved with measured manual runs, falling back to labelled assumptions", async () => {
+    const before: any = (await o.overview(seller)).usage;
+    assert.ok(before.baseline.every((b: any) => b.source === "assumed" && b.runs === 0));
+    assert.equal(before.workflows_with_measured_baseline, 0);
+    const statusDone = before.completed_by_task.update_order_status ?? 0;
+    assert.ok(statusDone > 0);
+
+    await assert.rejects(o.recordBaseline(seller, { task: "drop_tables", seconds: 30 }), /listed tasks/);
+    await assert.rejects(o.recordBaseline(seller, { task: "update_order_status", seconds: 1 }), /between/);
+    await assert.rejects(o.recordBaseline(buyer, { task: "update_order_status", seconds: 30 }), /sellers/);
+    for (const [seconds, taps] of [[40, 10], [60, 14], [200, 30]]) await o.recordBaseline(seller, { task: "update_order_status", seconds, taps, keys: 5 });
+
+    const after: any = (await o.overview(seller)).usage;
+    const row = after.baseline.find((b: any) => b.task === "update_order_status");
+    assert.deepEqual([row.source, row.runs, row.seconds, row.taps], ["measured", 3, 60, 14]); // medians
+    assert.equal(after.workflows_with_measured_baseline, statusDone);
+    assert.equal(after.manual_taps, statusDone * 14);
+    assert.equal(after.manual_seconds - before.manual_seconds, statusDone * (60 - o.ASSUMED_MANUAL_SECONDS.update_order_status));
+    assert.equal(after.baseline.find((b: any) => b.task === "adjust_stock").source, "assumed");
+
+    const mine = await o.listBaselines(seller);
+    assert.equal(mine.length, 3);
+    await assert.rejects(o.deleteBaseline(other, mine[0].id), /not found/);
+    await o.deleteBaseline(seller, mine[0].id);
+    assert.equal((await o.listBaselines(seller)).length, 2);
+  });
 });

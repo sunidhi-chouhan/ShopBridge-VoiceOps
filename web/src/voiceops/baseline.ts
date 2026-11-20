@@ -1,0 +1,10 @@
+/** The manual jobs a seller can time, matching the agent's write tools one for one. */
+export const BASELINE_TASKS: Array<{ task: string; label: string; how: string }> = [
+  { task: "update_order_status", label: "Change an order's status", how: "Open Orders, find the order, change its status (add tracking if shipping)." },
+  { task: "send_customer_message", label: "Message a customer", how: "Find the order, open its chat, type and send the update." },
+  { task: "adjust_stock", label: "Adjust stock", how: "Open Products, find the item, edit its stock and save." },
+  { task: "cancel_order", label: "Cancel an order", how: "Find the order, check it has not shipped, cancel it." },
+  { task: "create_return", label: "Start a return", how: "Find the order, check the return window, record the return and tell the customer." },
+];
+
+export const taskLabel = (task: string) => BASELINE_TASKS.find((t) => t.task === task)?.label ?? task;

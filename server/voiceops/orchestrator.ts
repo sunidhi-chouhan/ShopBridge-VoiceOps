@@ -656,13 +656,66 @@ export async function overview(user: UserRecord) {
 
 /**
  * Measured usage plus clearly-labelled assumptions. Latency, audio minutes and counts come from the
- * database. Cost needs your Gemini rates (GEMINI_COST_IN_PER_MIN / GEMINI_COST_OUT_PER_MIN, USD per
- * audio minute); without them cost is null. The manual-time baseline is an assumption (seconds a
- * seller would spend doing the same job by tapping through screens), not a measurement.
+ * database. Cost uses Gemini list rates (overridable via GEMINI_COST_IN_PER_MIN / GEMINI_COST_OUT_PER_MIN).
+ * The manual-time baseline per task is the median of timed manual runs (voiceops_baselines, pooled across
+ * sellers) when any exist; otherwise it falls back to the assumption below and is reported as "assumed".
  */
 export const ASSUMED_MANUAL_SECONDS: Record<string, number> = {
   update_order_status: 90, cancel_order: 120, create_return: 240, send_customer_message: 150, adjust_stock: 90,
 };
+export const BASELINE_TASKS = Object.keys(ASSUMED_MANUAL_SECONDS);
+
+/** Store one timed manual run of a task (the seller did it by hand while a stopwatch ran). */
+export async function recordBaseline(user: UserRecord, input: { task?: unknown; seconds?: unknown; taps?: unknown; keys?: unknown }) {
+  assertSeller(user);
+  const task = String(input.task ?? "");
+  const seconds = Number(input.seconds);
+  const taps = Number(input.taps ?? 0);
+  const keys = Number(input.keys ?? 0);
+  if (!BASELINE_TASKS.includes(task)) throw new HttpError(422, "VALIDATION_ERROR", "Choose one of the listed tasks.");
+  if (!Number.isFinite(seconds) || seconds < 3 || seconds > 1800) throw new HttpError(422, "VALIDATION_ERROR", "A timed run must last between 3 seconds and 30 minutes.");
+  if (!Number.isInteger(taps) || taps < 0 || taps > 1000 || !Number.isInteger(keys) || keys < 0 || keys > 20000) {
+    throw new HttpError(422, "VALIDATION_ERROR", "Tap and key counts must be whole numbers.");
+  }
+  const baselineId = id("bl_");
+  await getPool().query("INSERT INTO voiceops_baselines (id, user_id, task, seconds, taps, keys) VALUES ($1,$2,$3,$4,$5,$6)", [baselineId, user.id, task, seconds, taps, keys]);
+  return { id: baselineId, task, seconds, taps, keys };
+}
+
+/** Timed manual runs by this seller (newest first), for review and deletion. */
+export async function listBaselines(user: UserRecord) {
+  assertSeller(user);
+  const res = await getPool().query("SELECT id, task, seconds, taps, keys, created_at FROM voiceops_baselines WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200", [user.id]);
+  return res.rows.map((r) => ({ ...r, seconds: Number(r.seconds) }));
+}
+
+export async function deleteBaseline(user: UserRecord, baselineId: string) {
+  assertSeller(user);
+  const res = await getPool().query("DELETE FROM voiceops_baselines WHERE id = $1 AND user_id = $2", [baselineId, user.id]);
+  if (!res.rowCount) throw new HttpError(404, "NOT_FOUND", "That timing was not found.");
+  return { ok: true };
+}
+
+export type BaselineRow = { task: string; seconds: number; taps: number | null; keys: number | null; runs: number; source: "measured" | "assumed" };
+
+/** Median manual seconds/taps/keys per task over every seller's timed runs; assumption where none exist. */
+async function baselineTable(client: pg.PoolClient): Promise<BaselineRow[]> {
+  const res = await client.query(
+    `SELECT task, count(*)::int AS runs,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY taps) AS taps,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY keys) AS keys
+       FROM voiceops_baselines GROUP BY task`,
+  );
+  const measured = new Map(res.rows.map((r) => [r.task as string, r]));
+  return BASELINE_TASKS.map((task) => {
+    const m = measured.get(task);
+    return m
+      ? { task, seconds: Math.round(Number(m.seconds)), taps: Math.round(Number(m.taps)), keys: Math.round(Number(m.keys)), runs: m.runs, source: "measured" as const }
+      : { task, seconds: ASSUMED_MANUAL_SECONDS[task], taps: null, keys: null, runs: 0, source: "assumed" as const };
+  });
+}
+
 async function usageFor(client: pg.PoolClient, sellerId: string) {
   const sessions = (await client.query("SELECT input_audio_seconds, output_audio_seconds, latencies FROM voiceops_sessions WHERE user_id = $1", [sellerId])).rows;
   const lat = sessions.flatMap((s) => (s.latencies as number[]) ?? []).map(Number).sort((a, b) => a - b);
@@ -680,7 +733,26 @@ async function usageFor(client: pg.PoolClient, sellerId: string) {
   const rateIn = process.env.GEMINI_COST_IN_PER_MIN ? Number(process.env.GEMINI_COST_IN_PER_MIN) : 0.005;
   const rateOut = process.env.GEMINI_COST_OUT_PER_MIN ? Number(process.env.GEMINI_COST_OUT_PER_MIN) : 0.018;
   const cost = Number.isFinite(rateIn) && Number.isFinite(rateOut) ? inMin * rateIn + outMin * rateOut : null;
-  const manual = completed.reduce((a, r) => a + r.n * (ASSUMED_MANUAL_SECONDS[r.tool] ?? 0), 0);
+  const baseline = await baselineTable(client);
+  const byTask = new Map(baseline.map((b) => [b.task, b]));
+  const doneByTask = new Map<string, number>();
+  for (const r of completed) doneByTask.set(r.tool, (doneByTask.get(r.tool) ?? 0) + r.n);
+  let manual = 0;
+  let measuredWorkflows = 0;
+  let manualTaps = 0;
+  for (const [task, n] of doneByTask) {
+    const b = byTask.get(task)!;
+    manual += n * b.seconds;
+    if (b.source === "measured") { measuredWorkflows += n; manualTaps += n * (b.taps ?? 0); }
+  }
+  // Taps the seller still made in voice workflows (approvals confirmed by tapping instead of speaking),
+  // counted over the same tasks as manual_taps so the two numbers compare like for like.
+  const measuredTasks = baseline.filter((b) => b.source === "measured").map((b) => b.task);
+  const approvals = (await client.query(
+    `SELECT count(*) FILTER (WHERE decided_via = 'tap')::int AS tap, count(*) FILTER (WHERE decided_via = 'voice')::int AS voice
+       FROM voiceops_approvals WHERE user_id = $1 AND state = 'executed' AND tool = ANY($2)`,
+    [sellerId, measuredTasks],
+  )).rows[0];
   return {
     sessions: sessions.length,
     input_minutes: Math.round(inMin * 100) / 100,
@@ -690,8 +762,19 @@ async function usageFor(client: pg.PoolClient, sellerId: string) {
     workflows_attempted: attempted.reduce((a, r) => a + r.n, 0),
     est_cost_usd: cost,
     est_cost_per_workflow_usd: cost !== null && nCompleted ? cost / nCompleted : null,
-    assumed_manual_seconds: manual,
+    rate_in_per_min_usd: rateIn,
+    rate_out_per_min_usd: rateOut,
+    /** Manual seconds the completed workflows would have taken (measured medians where available). */
+    manual_seconds: manual,
+    /** How many completed workflows were priced with a measured (not assumed) baseline. */
+    workflows_with_measured_baseline: measuredWorkflows,
+    /** Taps the measured manual runs needed for the same completed workflows. */
+    manual_taps: manualTaps,
+    voice_taps: approvals.tap,
+    voice_approvals: approvals.voice,
     voice_seconds: Math.round((inMin + outMin) * 60),
+    completed_by_task: Object.fromEntries(doneByTask),
+    baseline,
   };
 }
 

@@ -4143,3 +4143,18 @@ html, body, #root {
 @media (max-width: 767px) { .vo-dock { right: 8px; bottom: calc(76px + env(safe-area-inset-bottom, 0px)); } .vo-grid { gap: var(--space-3); } }
 .vo-select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); color: var(--ink); font: inherit; }
 .vo-digest { margin: 0; padding: 10px 12px; background: var(--sunken); border-radius: 10px; white-space: pre-wrap; line-height: 1.5; }
+
+/* VoiceOps economics: manual baseline stopwatch and ROI calculator */
+.vo-econ { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-4); }
+.vo-table-wrap { overflow-x: auto; }
+.vo-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+.vo-table th, .vo-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.vo-table th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+.vo-runs { margin-top: var(--space-2); }
+.vo-roi-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-3); }
+.vo-roi-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--ink-2); }
+.vo-roi-field input { width: 100%; box-sizing: border-box; }
+.vo-stopwatch { position: fixed; left: 16px; bottom: 60px; z-index: 41; width: min(360px, calc(100vw - 32px)); background: var(--raised); border: 2px solid var(--accent); border-radius: 16px; padding: 12px 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: var(--space-2); }
+.vo-stopwatch-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); }
+.vo-stopwatch-clock { font-variant-numeric: tabular-nums; font-size: 1.25rem; font-weight: 700; }
+@media (max-width: 767px) { .vo-stopwatch { left: 8px; right: 8px; width: auto; top: calc(8px + env(safe-area-inset-top, 0px)); bottom: auto; } }

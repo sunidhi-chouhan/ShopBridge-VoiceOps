@@ -10,7 +10,7 @@ const only = process.argv.includes("--only") ? process.argv[process.argv.indexOf
 const outFile = process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : null;
 const env = {};
 for (const l of readFileSync(".env", "utf8").split("\n")) { const m = l.match(/^([A-Z_]+)=(.*)$/); if (m) env[m[1]] = m[2].trim(); }
-const dbUrl = env.DATABASE_URL;
+const dbUrl = process.env.DATABASE_URL || env.DATABASE_URL; // an explicit env var wins over .env, like the server
 if (!dbUrl || !/@(127\.0\.0\.1|localhost)[:/]/.test(dbUrl)) { console.error("Refusing to run: DATABASE_URL must be a local database."); process.exit(1); }
 const db = new pg.Client({ connectionString: dbUrl });
 await db.connect();

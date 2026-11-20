@@ -307,8 +307,16 @@ export type VoiceOverview = {
     workflows_attempted: number;
     est_cost_usd: number | null;
     est_cost_per_workflow_usd: number | null;
-    assumed_manual_seconds: number;
+    rate_in_per_min_usd: number;
+    rate_out_per_min_usd: number;
+    manual_seconds: number;
+    workflows_with_measured_baseline: number;
+    manual_taps: number;
+    voice_taps: number;
+    voice_approvals: number;
     voice_seconds: number;
+    completed_by_task: Record<string, number>;
+    baseline: VoiceBaselineRow[];
   };
   demoEnabled?: boolean;
 };
@@ -342,6 +350,17 @@ export type VoiceApproval = {
 
 export type VoiceDecision = { ok: boolean; status: string; message: string; code?: string; actionId: string };
 
+export type VoiceBaselineRow = { task: string; seconds: number; taps: number | null; keys: number | null; runs: number; source: "measured" | "assumed" };
+export type VoiceBaselineRun = { id: string; task: string; seconds: number; taps: number; keys: number; created_at: string };
+export function voiceBaselines(): Promise<{ baselines: VoiceBaselineRun[] }> {
+  return request("/api/voiceops/baselines");
+}
+export function recordVoiceBaseline(run: { task: string; seconds: number; taps: number; keys: number }): Promise<VoiceBaselineRun> {
+  return request("/api/voiceops/baselines", { method: "POST", body: JSON.stringify(run) });
+}
+export function deleteVoiceBaseline(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/voiceops/baselines/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
 export function voiceOverview(): Promise<VoiceOverview> {
   return request("/api/voiceops/overview");
 }

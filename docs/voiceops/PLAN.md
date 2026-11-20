@@ -111,3 +111,9 @@ Added: spend caps (concurrent, per-IP/day, audio-min/day), backup Gemini key + m
 (mobile-safe), Nexconn rooms for demo orders 1042 and 1050 (belong to the demo buyer so messages are visible), Tamil/Tanglish scenario (s6),
 daily digest (bonus) in en/hi/ta/hinglish, list-price cost estimate, docs/voiceops/SUBMISSION.md. Latest full scenario run: 6 of 6; 73 tests pass.
 Found: auto-picked newest Flash text model hung on this key; pin GEMINI_MODEL=gemini-2.5-flash (also fixes support-reply drafting).
+
+## ROI pass
+Added a manual-baseline stopwatch (Overview; floats across seller screens, counts taps and keystrokes, stores runs in
+`voiceops_baselines`, migration 007). Time saved now uses the per-task median of timed runs and only falls back to the assumed
+times for untimed tasks (badged). Added an ROI calculator: measured voice seconds, manual seconds and AI cost per workflow x
+editable business inputs, with Copy summary. Note: on 2026-11-20 preflight reported the primary GEMINI_API_KEY rejected (HTTP 400); backup key valid.

@@ -53,6 +53,19 @@ export async function handleVoiceOpsApi(req: IncomingMessage, res: ServerRespons
     deps.sendJson(res, 200, { ...(await orchestrator.overview(user)), demoEnabled: demoEnabled() && user.sample });
     return true;
   }
+  if (method === "GET" && pathname === "/api/voiceops/baselines") {
+    deps.sendJson(res, 200, { baselines: await orchestrator.listBaselines(user) });
+    return true;
+  }
+  if (method === "POST" && pathname === "/api/voiceops/baselines") {
+    deps.sendJson(res, 201, await orchestrator.recordBaseline(user, object(await deps.readJson(req))));
+    return true;
+  }
+  const baselineDelete = pathname.match(/^\/api\/voiceops\/baselines\/([a-z0-9_]+)$/);
+  if (method === "DELETE" && baselineDelete) {
+    deps.sendJson(res, 200, await orchestrator.deleteBaseline(user, baselineDelete[1]));
+    return true;
+  }
   if (method === "GET" && pathname === "/api/voiceops/activity") {
     deps.sendJson(res, 200, { actions: await orchestrator.listActivity(user) });
     return true;

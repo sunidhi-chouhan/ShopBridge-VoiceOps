@@ -20,6 +20,7 @@ import { useToast } from "../ui/Toast";
 import type { TimelineItem } from "./useVoiceAgent";
 import { useVoiceAgent } from "./useVoiceAgent";
 import { useVoice } from "./VoiceContext";
+import { BaselineCard, RoiCalculator } from "./Economics";
 
 type Tab = "agent" | "approvals" | "activity" | "overview";
 
@@ -386,7 +387,8 @@ function OverviewTab({ tick, refresh, liveActive }: { tick: number; refresh: () 
   useEffect(() => { voiceOverview().then(setData).catch(() => undefined); }, [tick]);
   if (!data) return <p className="vo-hint">Loading…</p>;
   const { summary: s, activity: a, usage: u } = data;
-  const saved = Math.max(0, u.assumed_manual_seconds - u.voice_seconds);
+  const saved = Math.max(0, u.manual_seconds - u.voice_seconds);
+  const allMeasured = u.workflows_completed > 0 && u.workflows_with_measured_baseline === u.workflows_completed;
   const done = a.succeeded;
   return (
     <>
@@ -412,9 +414,12 @@ function OverviewTab({ tick, refresh, liveActive }: { tick: number; refresh: () 
         <Metric label="Voice sessions" value={`${u.sessions} (${(u.input_minutes + u.output_minutes).toFixed(1)} audio min)`} />
         <Metric label="Workflows done / tried" value={`${u.workflows_completed} / ${u.workflows_attempted}`} />
         <Metric label="Cost per workflow" value={u.est_cost_per_workflow_usd !== null ? `$${u.est_cost_per_workflow_usd.toFixed(3)}` : "–"} />
-        <Metric label="Time saved (assumed baseline)" value={u.workflows_completed ? `${Math.round(saved / 60)} min` : "–"} />
+        <Metric label={allMeasured ? "Time saved (measured baseline)" : "Time saved (partly assumed baseline)"} value={u.workflows_completed ? `${Math.round(saved / 60)} min` : "–"} />
+        <Metric label="Taps: by hand / by voice" value={u.workflows_with_measured_baseline ? `${u.manual_taps} / ${u.voice_taps}` : "time a task first"} />
       </MetricGrid>
-      <p className="vo-hint">Latency, minutes and counts are measured. Time saved compares against an assumed manual time per task (90 to 240 s), not a measurement. Cost is an audio-minutes estimate at Google's list price for Gemini 3.8 Live ($0.005/min in, $0.018/min out, checked 13 Nov 2026), excluding text tokens.</p>
+      <p className="vo-hint">Latency, minutes and counts are measured. Time saved compares voice audio time with the manual baseline below: measured where you have timed the task, assumed (90 to 240 s) where you have not. Cost is an audio-minutes estimate at Google's list price for Gemini 3.8 Live (${u.rate_in_per_min_usd}/min in, ${u.rate_out_per_min_usd}/min out), excluding text tokens.</p>
+      <BaselineCard usage={u} tick={tick} />
+      <RoiCalculator usage={u} />
       <Digest />
       <Preflight />
       {data.demoEnabled ? (

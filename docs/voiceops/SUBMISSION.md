@@ -29,17 +29,31 @@ Nexconn order chat -> spoken confirmation, transcript, action timeline and Activ
 - **Visibility:** live tool timeline with milliseconds, approval cards, Activity log marking human involvement, Overview metrics.
 
 ## 4. Commercial viability
-**Unit cost [MEASURED inputs, list-price assumption]:** each session records audio minutes in and out. Overview shows cost per
-completed workflow using Google's published paid-tier list price for Gemini 3.8 Live audio ($0.005/min input, $0.018/min output, checked
-13 Nov 2026 at aistudio.google.com/docs/pricing). This excludes text tokens and hosting. Copy the "Cost per workflow" figure from
-Overview after a demo run.
+The ROI case is built from per-workflow unit numbers this app measures itself, multiplied by business inputs you set.
+Everything is on **Voice > Overview**.
 
-**Time saved [ASSUMPTION, labelled in the UI]:** manual baseline per task (status 90 s, stock 90 s, cancel 120 s, message 150 s, return
-240 s). Replace with timings from 5 to 10 real sellers; Overview subtracts measured voice seconds.
+| Input | Where it comes from | Status |
+|---|---|---|
+| Voice seconds per workflow | All session audio (in + out) / completed workflows. Includes greetings and lookups, so it overstates voice time and understates the saving | **[MEASURED]** |
+| AI cost per workflow | Audio minutes x Google's paid-tier list price for Gemini 3.8 Live ($0.005/min in, $0.018/min out, checked 13 Nov 2026). Excludes text tokens | **[MEASURED]** minutes, list price |
+| Manual seconds, taps and keystrokes per task | **Manual baseline** stopwatch: the seller starts it, does the job by tapping through the normal screens, presses Done. The median over all timed runs is used per task | **[MEASURED]** once timed; until then **[ASSUMPTION]** (90-240 s), badged "assumed" in the UI |
+| Taps by voice | Approvals confirmed by tapping instead of speaking, over the same tasks | **[MEASURED]** |
+| Errors avoided | Actions blocked by policy (cancel after dispatch, closed return window, duplicates, unknown orders) | **[MEASURED]** |
+| Sellers, workflows per day, working days, value of a seller's hour, ₹/USD, hosting per seller, subscription price | ROI calculator fields, saved per browser | **[ASSUMPTION]**, yours to set |
 
-**ROI at scale (formula):** monthly saving per seller = workflows per month x (manual seconds - voice seconds) / 3600 x seller's
-hourly value; compare with workflows per month x cost per workflow + hosting. Voice cost scales linearly with audio minutes, so
-the levers are shorter sessions, push-to-talk on mobile and caching of lookups. Add your own volumes here.
+**Outputs (ROI calculator):** per seller per month: hours saved, value of time saved, AI cost, platform margin, seller net after
+the subscription; at N sellers: hours saved, revenue, AI spend, gross margin. **Copy summary** puts the current figures on the
+clipboard for this document.
+
+**How the cost scales:** AI cost per workflow is audio minutes x list price (output audio costs 3.6x input), so it grows
+linearly with talk time. The levers are short, acknowledge-first replies, push-to-talk on mobile and doing several actions per
+session. Whether a seller comes out ahead depends on the real manual time, which is why it is measured rather than assumed.
+
+**Before submitting:** time each of the five tasks at least 3 times (ideally 5 to 10 real sellers on their own phones), run
+the demo workflows by voice, set the calculator inputs to your own pricing and volumes, press **Copy summary** and paste the
+result here:
+
+> _(paste ROI summary here)_
 
 **Language coverage [MEASURED]:** Hindi, Hinglish, English and Tamil/Tanglish scenarios pass with real Gemini speech (Tamil drafted
 customer message in Tamil script). Other Indic languages are untested and should be listed as "to validate" until tested.

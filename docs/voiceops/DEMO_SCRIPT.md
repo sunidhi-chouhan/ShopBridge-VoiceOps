@@ -29,10 +29,12 @@ Click **Approve**. Order 1050 stays shipped.
 With noise playing, say: **"Order 1052 ko... nahi nahi, 1053 ko shipped mark karo, Delhivery, tracking DL999."**
 Point out: it proposes 1053 only. If it is unsure of a number it asks you to repeat instead of guessing (1042 vs 1052).
 
-## 5. The numbers (45 s)
+## 5. The numbers (60 s)
+Before the demo: on **Overview → Manual baseline**, time each task by hand a few times (Start timing, do it in the normal screens, Done).
 Open **Overview → Performance and economics**: p50/p95 latency, audio minutes, workflows completed vs tried, blocked by policy,
-needed a human. State plainly which values are measured and that "time saved" uses an assumed manual baseline.
-Cost per workflow appears once `GEMINI_COST_IN_PER_MIN` / `GEMINI_COST_OUT_PER_MIN` are set to your current Gemini rates.
+needed a human, taps by hand vs by voice. Then **ROI at scale**: measured voice seconds, manual seconds and AI cost per workflow,
+multiplied by the business inputs. Say plainly which values are measured and which inputs are yours (each task shows a
+"measured" or "assumed" badge).
 
 ## If something goes wrong
 - Mic blocked: type in the box under the transcript; everything else is identical.
