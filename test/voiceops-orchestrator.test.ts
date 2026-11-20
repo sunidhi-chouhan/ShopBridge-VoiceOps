@@ -216,4 +216,16 @@ describe("VoiceOps orchestrator (Postgres)", { skip: available ? false : PG_SKIP
     await o.deleteBaseline(seller, mine[0].id);
     assert.equal((await o.listBaselines(seller)).length, 2);
   });
+
+  it("keeps Overview working before the baselines migration has run", async () => {
+    await sql(url, "ALTER TABLE voiceops_baselines RENAME TO voiceops_baselines_hidden");
+    try {
+      const u: any = (await o.overview(seller)).usage;
+      assert.ok(u.baseline.every((b: any) => b.source === "assumed"));
+      assert.deepEqual(await o.listBaselines(seller), []);
+      await assert.rejects(o.recordBaseline(seller, { task: "adjust_stock", seconds: 30 }), /migration 007/);
+    } finally {
+      await sql(url, "ALTER TABLE voiceops_baselines_hidden RENAME TO voiceops_baselines");
+    }
+  });
 });

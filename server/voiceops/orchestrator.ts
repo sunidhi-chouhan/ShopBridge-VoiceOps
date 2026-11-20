@@ -664,6 +664,8 @@ export const ASSUMED_MANUAL_SECONDS: Record<string, number> = {
   update_order_status: 90, cancel_order: 120, create_return: 240, send_customer_message: 150, adjust_stock: 90,
 };
 export const BASELINE_TASKS = Object.keys(ASSUMED_MANUAL_SECONDS);
+const isMissingTable = (error: unknown) => (error as { code?: string })?.code === "42P01";
+const NOT_MIGRATED = () => new HttpError(503, "NOT_MIGRATED", "Manual timing needs a database update (migration 007). Ask the admin to run npm run db:migrate.");
 
 /** Store one timed manual run of a task (the seller did it by hand while a stopwatch ran). */
 export async function recordBaseline(user: UserRecord, input: { task?: unknown; seconds?: unknown; taps?: unknown; keys?: unknown }) {
@@ -678,14 +680,21 @@ export async function recordBaseline(user: UserRecord, input: { task?: unknown; 
     throw new HttpError(422, "VALIDATION_ERROR", "Tap and key counts must be whole numbers.");
   }
   const baselineId = id("bl_");
-  await getPool().query("INSERT INTO voiceops_baselines (id, user_id, task, seconds, taps, keys) VALUES ($1,$2,$3,$4,$5,$6)", [baselineId, user.id, task, seconds, taps, keys]);
+  try {
+    await getPool().query("INSERT INTO voiceops_baselines (id, user_id, task, seconds, taps, keys) VALUES ($1,$2,$3,$4,$5,$6)", [baselineId, user.id, task, seconds, taps, keys]);
+  } catch (error) {
+    if (isMissingTable(error)) throw NOT_MIGRATED();
+    throw error;
+  }
   return { id: baselineId, task, seconds, taps, keys };
 }
 
 /** Timed manual runs by this seller (newest first), for review and deletion. */
 export async function listBaselines(user: UserRecord) {
   assertSeller(user);
-  const res = await getPool().query("SELECT id, task, seconds, taps, keys, created_at FROM voiceops_baselines WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200", [user.id]);
+  const res = await getPool()
+    .query("SELECT id, task, seconds, taps, keys, created_at FROM voiceops_baselines WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200", [user.id])
+    .catch((error) => { if (isMissingTable(error)) return { rows: [] as any[] }; throw error; });
   return res.rows.map((r) => ({ ...r, seconds: Number(r.seconds) }));
 }
 
@@ -700,14 +709,20 @@ export type BaselineRow = { task: string; seconds: number; taps: number | null; 
 
 /** Median manual seconds/taps/keys per task over every seller's timed runs; assumption where none exist. */
 async function baselineTable(client: pg.PoolClient): Promise<BaselineRow[]> {
-  const res = await client.query(
-    `SELECT task, count(*)::int AS runs,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY taps) AS taps,
-            percentile_cont(0.5) WITHIN GROUP (ORDER BY keys) AS keys
-       FROM voiceops_baselines GROUP BY task`,
-  );
-  const measured = new Map(res.rows.map((r) => [r.task as string, r]));
+  // Until migration 007 has run, the table is missing: report every task as assumed instead of failing Overview.
+  let rows: any[] = [];
+  try {
+    rows = (await client.query(
+      `SELECT task, count(*)::int AS runs,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) AS seconds,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY taps) AS taps,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY keys) AS keys
+         FROM voiceops_baselines GROUP BY task`,
+    )).rows;
+  } catch (error) {
+    if (!isMissingTable(error)) throw error;
+  }
+  const measured = new Map(rows.map((r) => [r.task as string, r]));
   return BASELINE_TASKS.map((task) => {
     const m = measured.get(task);
     return m
