@@ -25,7 +25,7 @@ export function navItems(role: Role): { id: Section; label: string }[] {
   }
   if (role === "volunteer") {
     return [
-      { id: "voice", label: "Voice" },
+      { id: "voice", label: "Voice AI" },
       { id: "orders", label: "Orders" },
       { id: "inbox", label: "Inbox" },
       { id: "products", label: "Products" },

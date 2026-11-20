@@ -21,8 +21,9 @@ import type { TimelineItem } from "./useVoiceAgent";
 import { useVoiceAgent } from "./useVoiceAgent";
 import { useVoice } from "./VoiceContext";
 import { BaselineCard, RoiCalculator } from "./Economics";
+import { AiStory } from "../ai/AiStory";
 
-type Tab = "agent" | "approvals" | "activity" | "overview";
+type Tab = "agent" | "how" | "approvals" | "activity" | "overview";
 
 const TOOL_LABEL: Record<string, string> = {
   business_summary: "Business summary",
@@ -72,6 +73,32 @@ function argsLine(args: Record<string, unknown>): string {
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
     .map(([k, v]) => `${k.replace(/_/g, " ")}: ${typeof v === "object" ? JSON.stringify(v) : String(v)}`)
     .join(" · ");
+}
+
+const AI_STAGES = ["Listens", "Understands", "Decides", "Checks policy", "Asks you", "Done"] as const;
+
+/** Which step of the AI loop is happening right now, from the live transcript and tool timeline. */
+function aiStage(agent: ReturnType<typeof useVoiceAgent>): number {
+  if (agent.status !== "live") return -1;
+  const item = agent.timeline.at(-1);
+  const turn = agent.turns.at(-1);
+  if (item?.status === "running") return 2;
+  if (item?.status === "awaiting_approval") return 4;
+  if (turn?.role === "user" && !turn.final) return 1;
+  if (item?.status === "blocked") return 3;
+  if (item && ["succeeded", "approved"].includes(item.status)) return 5;
+  return 0;
+}
+
+function AiLoop({ agent }: { agent: ReturnType<typeof useVoiceAgent> }) {
+  const stage = aiStage(agent);
+  return (
+    <ol className="vo-ailoop" aria-label="What the AI is doing">
+      {AI_STAGES.map((label, i) => (
+        <li key={label} className={i === stage ? "is-now" : i < stage ? "is-past" : undefined} aria-current={i === stage ? "step" : undefined}>{label}</li>
+      ))}
+    </ol>
+  );
 }
 
 function Waveform({ level }: { level: (which: "mic" | "agent") => number }) {
@@ -200,6 +227,8 @@ function AgentTab({ agent, refresh }: { agent: ReturnType<typeof useVoiceAgent>;
               {avg !== null ? <span className="vo-lat-avg">avg {avg} ms · {agent.latencies.length} turns</span> : null}
             </div>
           </div>
+          <p className="vo-aibadge"><span aria-hidden="true">✦</span> AI agent · Gemini Live native audio · server-checked actions</p>
+          <AiLoop agent={agent} />
           <Waveform level={level} />
           <div className="vo-controls">
             {live || agent.status === "connecting" ? (
@@ -213,7 +242,7 @@ function AgentTab({ agent, refresh }: { agent: ReturnType<typeof useVoiceAgent>;
             {agent.model ? <span className="vo-model">{agent.model}</span> : null}
           </div>
           {agent.error ? <p className="vo-error" role="alert">{agent.error}</p> : null}
-          <p className="vo-hint">Hindi, Hinglish or English. Use a headset in a noisy shop. You can interrupt the agent at any time.</p>
+          <p className="vo-hint">Speak Hindi, Hinglish, Tamil or English. The AI looks things up, proposes the change and waits for your yes. Interrupt it any time.</p>
         </Card>
 
         <Card variant="form" className="vo-convo">
@@ -437,19 +466,41 @@ function OverviewTab({ tick, refresh, liveActive }: { tick: number; refresh: () 
 export function VoiceOps() {
   const [tab, setTab] = useState<Tab>("agent");
   const [pending, setPending] = useState(0);
+  const [latency, setLatency] = useState<{ p50: number | null; p95: number | null; turns: number }>({ p50: null, p95: null, turns: 0 });
   const { agent, tick, refresh } = useVoice();
   useEffect(() => {
-    voiceOverview().then((o) => setPending(o.summary.pending_approvals)).catch(() => undefined);
+    voiceOverview()
+      .then((o) => {
+        setPending(o.summary.pending_approvals);
+        setLatency({ p50: o.usage.latency.p50_ms, p95: o.usage.latency.p95_ms, turns: o.usage.latency.turns });
+      })
+      .catch(() => undefined);
   }, [tick]);
-  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
+  const tabBar = useRef<HTMLDivElement>(null);
+  const openTab = (next: Tab) => {
+    setTab(next);
+    // Each tab starts at its top, even when the previous tab was scrolled far down.
+    window.requestAnimationFrame(() => tabBar.current?.scrollIntoView({ block: "nearest" }));
+  };
+  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
   return (
     <div className="vo-page">
-      <div className="vo-tabs" role="tablist">
+      <div className="vo-tabs" role="tablist" ref={tabBar}>
         {tabs.map(([id, text]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={`vo-tab${tab === id ? " is-active" : ""}`} onClick={() => setTab(id)}>{text}</button>
+          <button key={id} role="tab" aria-selected={tab === id} className={`vo-tab${tab === id ? " is-active" : ""}`} onClick={() => openTab(id)}>{text}</button>
         ))}
       </div>
       <div hidden={tab !== "agent"}><AgentTab agent={agent} refresh={refresh} /></div>
+      {tab === "how" ? (
+        <AiStory
+          variant="app"
+          measured={latency}
+          onTry={() => {
+            openTab("agent");
+            if (agent.status === "idle" || agent.status === "error") void agent.start();
+          }}
+        />
+      ) : null}
       {tab === "approvals" ? <ApprovalsTab tick={tick} refresh={refresh} /> : null}
       {tab === "activity" ? <ActivityTab tick={tick} refresh={refresh} /> : null}
       {tab === "overview" ? <OverviewTab tick={tick} refresh={refresh} liveActive={agent.status === "live" || agent.status === "connecting"} /> : null}

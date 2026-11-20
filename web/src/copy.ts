@@ -2,8 +2,8 @@ import type { RequestStatus } from "../../shared/types";
 
 export const copy = {
   name: "ShopBridge",
-  tagline: "Every order is a conversation.",
-  place: "Indore",
+  tagline: "Voice AI that runs your shop.",
+  place: "Gemini Live voice agent · for Indian sellers",
   signInTitle: "Sign in",
   nameLabel: "Your name",
   emailLabel: "Email",
@@ -13,7 +13,7 @@ export const copy = {
   haveAccount: "Sign in instead",
   buyerOnly: "New accounts are buyers. Seller and support desks are approved separately.",
   demoKicker: "Explore demo",
-  demoLead: "Open a buyer, seller, or support desk. Roles are set on the server.",
+  demoLead: "Open the Seller desk to talk to the voice AI. Buyer and support desks show the other side of each order.",
   demoBuyer: "Buyer",
   demoSeller: "Seller",
   demoSupport: "Support agent",

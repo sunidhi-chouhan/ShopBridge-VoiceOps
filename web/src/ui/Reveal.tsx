@@ -2,19 +2,19 @@ import { motion } from "motion/react";
 import { easeOut, useMotionOn } from "./motion";
 
 const lines = [
-  ["Every", "order", "is", "a"],
-  ["conversation."],
+  ["Say", "it", "once."],
+  ["The", "AI", "does", "the", "work."],
 ];
 
 export function RevealHeadline({ className }: { className?: string }) {
   const motionOn = useMotionOn();
-  const label = "Every order is a conversation.";
+  const label = "Say it once. The AI does the work.";
 
   if (!motionOn) {
     return (
       <h1 className={className}>
-        <span className="line">Every order is a</span>
-        <span className="line">conversation.</span>
+        <span className="line">Say it once.</span>
+        <span className="line">The AI does the work.</span>
       </h1>
     );
   }

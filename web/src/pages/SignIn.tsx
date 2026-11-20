@@ -6,6 +6,7 @@ import { copy } from "../copy";
 import { Hall } from "../ui/Hall";
 import { easeOut, fadeUp, stagger, useMotionOn } from "../ui/motion";
 import { RevealHeadline } from "../ui/Reveal";
+import { AiStory } from "../ai/AiStory";
 
 type Mode = "signin" | "register";
 
@@ -101,7 +102,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
         : copy.continue;
 
   return (
-    <main className="hall" id="main">
+    <main id="main" className="landing">
+    <div className="hall">
       <Hall paused={paused} />
       <header className="hall-top">
         <a className="wordmark hall-mark" href="#main">
@@ -136,8 +138,21 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.78, duration: 0.8, ease: easeOut }}
           >
-            Sign in to buy, sell, or support an order. Roles stay on the server.
+            Speak to your shop in Hindi, Hinglish, Tamil or English. A Gemini voice agent checks your orders, asks before it changes anything, and tells you what it did.
           </motion.p>
+          <motion.a
+            className="hall-how"
+            href="#how-ai"
+            initial={motionOn ? { opacity: 0, y: 12 } : false}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.95, duration: 0.8, ease: easeOut }}
+            onClick={(event) => {
+              event.preventDefault();
+              document.getElementById("how-ai")?.scrollIntoView({ behavior: motionOn ? "smooth" : "auto" });
+            }}
+          >
+            See how the AI works <span aria-hidden="true">↓</span>
+          </motion.a>
         </div>
         <motion.form
           className="hall-enter"
@@ -269,6 +284,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
           </motion.section>
         </motion.form>
       </div>
+    </div>
+      <AiStory variant="landing" onTry={busy ? undefined : () => void onDemo("seller")} />
     </main>
   );
 }
