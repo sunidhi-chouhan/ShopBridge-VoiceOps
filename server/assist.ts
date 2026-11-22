@@ -12,6 +12,7 @@
  */
 import type { HelpRequestView, Language, OrderView } from "../shared/types";
 import { HttpError } from "./errors";
+import { failureFromStatus, hasGeminiKey, keyRotation, markKeyFailed, markKeyOk } from "./gemini-keys";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const TIMEOUT_MS = 20_000;
@@ -28,7 +29,7 @@ const LANGUAGE_NAMES: Record<Language, string> = {
 export type TranscriptLine = { role: "buyer" | "seller" | "support" | "event"; text: string };
 
 export function assistConfigured(): boolean {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
+  return hasGeminiKey();
 }
 
 export function parseTranscript(value: unknown): TranscriptLine[] {
@@ -136,7 +137,8 @@ export async function generateText(input: {
   /** Optional image (base64) for vision prompts. */
   image?: { data: string; mime: string };
 }): Promise<{ text: string; model: string }> {
-  const keys = [process.env.GEMINI_API_KEY?.trim(), process.env.GEMINI_API_KEY_BACKUP?.trim()].filter((k): k is string => Boolean(k));
+  // Every configured key, starting at the next one in the rotation; resting keys go last.
+  const keys = keyRotation();
   if (!keys.length) throw new HttpError(503, "AI_NOT_CONFIGURED", `AI ${input.purpose} is not configured on this server.`);
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: input.system }] },
@@ -149,9 +151,10 @@ export async function generateText(input: {
   });
   let attempts = 0;
   let sawEmpty = false;
-  for (const key of [...new Set(keys)]) {
+  const budget = Math.min(MAX_ATTEMPTS + keys.length * 2, 24);
+  for (const { key } of keys) {
     for (const model of await candidateModels(key)) {
-      if (attempts++ >= MAX_ATTEMPTS) break;
+      if (attempts++ >= budget) break;
       let response: Response;
       try {
         response = await fetchWithTimeout(`${API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
@@ -162,8 +165,14 @@ export async function generateText(input: {
       } catch {
         continue;
       }
-      if ([400, 401, 403].includes(response.status)) break;
-      if (!response.ok) continue;
+      const keyFault = failureFromStatus(response.status);
+      if (keyFault) {
+        // This key is rejected or out of quota: rest it and move straight on to the next key.
+        markKeyFailed(key, keyFault);
+        break;
+      }
+      if (!response.ok) continue; // retired (404) or busy (5xx) model: try the next model
+      markKeyOk(key);
       const json = (await response.json().catch(() => null)) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       } | null;

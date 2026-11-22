@@ -4,6 +4,7 @@
  */
 import { checkDatabaseReady } from "../db/pool";
 import { nexconnConfigured } from "../nexconn";
+import { configuredKeys, keyHealth, slotName } from "../gemini-keys";
 import { geminiAttempts } from "./live";
 
 export type PreflightCheck = { name: string; ok: boolean; detail: string };
@@ -34,15 +35,25 @@ export async function runPreflight(): Promise<{ ok: boolean; checks: PreflightCh
 
   const attempts = geminiAttempts();
   const models = [...new Set(attempts.map((a) => a.model))];
-  const slots = [...new Set(attempts.map((a) => a.keyIndex))];
-  if (!slots.length) checks.push({ name: "Gemini key", ok: false, detail: "GEMINI_API_KEY is not set" });
-  for (const slot of slots) {
-    const key = attempts.find((a) => a.keyIndex === slot)!.key;
-    const r = await keyCheck(key, models);
-    checks.push({ name: slot === 0 ? "Gemini primary key" : "Gemini backup key", ok: r.ok, detail: r.detail });
+  const keys = configuredKeys();
+  if (!keys.length) checks.push({ name: "Gemini key", ok: false, detail: "GEMINI_API_KEY is not set" });
+  const health = new Map(keyHealth().map((h) => [h.slot, h]));
+  const results = await Promise.all(keys.map(async ({ key, slot }) => ({ slot, ...(await keyCheck(key, models)) })));
+  for (const r of results) {
+    const resting = health.get(r.slot);
+    const note = resting?.coolingDownSeconds ? ` · resting ${resting.coolingDownSeconds}s after a ${resting.reason} failure` : "";
+    checks.push({ name: `Gemini ${slotName(r.slot)}`, ok: r.ok, detail: `${r.detail}${note}` });
   }
-  if (slots.length === 1) checks.push({ name: "Gemini backup key", ok: false, detail: "not configured (GEMINI_API_KEY_BACKUP); a quota or key failure would end voice" });
+  const working = results.filter((r) => r.ok).length;
+  if (keys.length) {
+    checks.push({
+      name: "Gemini key rotation",
+      ok: working > 0,
+      detail: `${working} of ${keys.length} key${keys.length > 1 ? "s" : ""} working; every call rotates through all of them and fails over to the next${keys.length === 1 ? ". Add GEMINI_API_KEY_BACKUP (and _2, _3…) so one bad key cannot stop voice" : ""}.`,
+    });
+  }
   checks.push({ name: "Chat service", ok: nexconnConfigured(), detail: nexconnConfigured() ? "configured" : "not configured; customer messages are recorded but not delivered" });
-  const required = checks.filter((c) => c.name !== "Gemini backup key" && c.name !== "Chat service");
+  // Ready when the database is up and at least one Gemini key works (rotation covers the rest).
+  const required = checks.filter((c) => c.name === "Database" || c.name === "Gemini key rotation" || c.name === "Gemini key");
   return { ok: required.every((c) => c.ok), checks };
 }

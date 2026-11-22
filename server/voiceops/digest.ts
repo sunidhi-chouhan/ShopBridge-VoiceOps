@@ -4,6 +4,7 @@
  * model is told not to add numbers, dates or promises.
  */
 import { generateText } from "../assist";
+import { hasGeminiKey } from "../gemini-keys";
 import { getPool } from "../db/pool";
 import { HttpError } from "../errors";
 import type { UserRecord } from "../store-types";
@@ -19,7 +20,7 @@ export type DigestLanguage = keyof typeof DIGEST_LANGUAGES;
 export type DigestAudience = keyof typeof DIGEST_AUDIENCES;
 
 export async function dailyDigest(user: UserRecord, language: DigestLanguage, audience: DigestAudience): Promise<{ text: string; model: string; facts: unknown }> {
-  if (!process.env.GEMINI_API_KEY?.trim() && !process.env.GEMINI_API_KEY_BACKUP?.trim()) throw new HttpError(503, "AI_NOT_CONFIGURED", "AI is not configured on this server.");
+  if (!hasGeminiKey()) throw new HttpError(503, "AI_NOT_CONFIGURED", "AI is not configured on this server.");
   const { summary, activity } = await orchestrator.overview(user);
   const actions = (
     await getPool().query(

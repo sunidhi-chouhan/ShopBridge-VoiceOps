@@ -41,8 +41,11 @@ Nexconn order chat -> spoken confirmation, transcript, action timeline and Activ
 | Support | Reply drafts grounded in the order record | Gemini Flash | Agent edits and sends |
 | Owner, team, customers | Daily digest in English, Hindi, Tamil, Hinglish | Gemini Flash | Read-only, from database facts |
 
-Text features try the configured model, then the newest available Flash models, then `gemini-flash-latest`, on both keys, so a retired
-or busy model does not take a feature down.
+**Resilience:** every Gemini call (voice and text) draws from a key pool (`GEMINI_API_KEY`, `GEMINI_API_KEY_BACKUP`,
+`GEMINI_API_KEY_BACKUP_2` … `_9`). Calls rotate their starting key so load and quota spread across keys, fail over to the next key
+when one is rejected or out of quota, and rest a failing key (10 min rejected, 2 min quota) so later calls skip it. Text features also
+fall back across models (configured, newest Flash, `gemini-flash-latest`), so a retired or busy model does not take a feature down.
+The pre-demo check tests every key by slot, never showing key values.
 
 ## 4. Commercial viability
 The ROI case is built from per-workflow unit numbers this app measures itself, multiplied by business inputs you set.

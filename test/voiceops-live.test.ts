@@ -168,6 +168,27 @@ describe("VoiceOps Live relay with a fake Gemini", { skip: available ? false : P
     }
   });
 
+  it("rotates through backup keys 2, 3… when earlier keys are rejected", async () => {
+    const names = ["GEMINI_API_KEY", "GEMINI_API_KEY_BACKUP", "GEMINI_API_KEY_BACKUP_2"] as const;
+    const saved = names.map((n) => process.env[n]);
+    process.env.GEMINI_API_KEY = "bad-key";
+    process.env.GEMINI_API_KEY_BACKUP = "bad-key-2";
+    process.env.GEMINI_API_KEY_BACKUP_2 = "good-key";
+    (await import("../server/gemini-keys")).resetKeyPool();
+    try {
+      const c = await connect();
+      const ready = await c.waitFor((e) => e.type === "ready" || e.type === "error", 8000);
+      assert.equal(ready.type, "ready");
+      c.ws.send(JSON.stringify({ type: "end" }));
+      await c.waitFor((e) => e.type === "closed");
+      const health = (await import("../server/gemini-keys")).keyHealth();
+      assert.deepEqual(health.filter((h) => h.coolingDownSeconds).map((h) => h.slot), [1, 2], "rejected keys rest; the working key does not");
+    } finally {
+      names.forEach((n, i) => (saved[i] === undefined ? delete process.env[n] : (process.env[n] = saved[i])));
+      (await import("../server/gemini-keys")).resetKeyPool();
+    }
+  });
+
   it("reports a clean error when every key fails", async () => {
     const saved = process.env.GEMINI_API_KEY;
     process.env.GEMINI_API_KEY = "bad-key";

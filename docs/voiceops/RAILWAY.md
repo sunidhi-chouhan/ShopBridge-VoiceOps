@@ -21,6 +21,7 @@ Reference the database with Railway's variable reference rather than pasting a U
 | `SHOPBRIDGE_DEMO_PASSWORD` | a password you choose; must equal the one used when seeding |
 | `GEMINI_API_KEY` | primary key (billing-enabled Google Cloud project) |
 | `GEMINI_API_KEY_BACKUP` | backup key from a different project |
+| `GEMINI_API_KEY_BACKUP_2` … `_9` | more backup keys; every call rotates through all keys and fails over |
 | `GEMINI_LIVE_MODEL` | `gemini-3.8-live` |
 | `GEMINI_LIVE_FALLBACK_MODELS` | `gemini-3.1-flash-live-preview` |
 | `GEMINI_MODEL` | `gemini-2.5-flash` (text model; the auto-picked one was unreliable) |

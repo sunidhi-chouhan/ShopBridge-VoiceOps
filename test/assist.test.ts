@@ -103,6 +103,7 @@ describe("AI reply drafting", () => {
   });
 
   it("falls back past retired and busy models, and to the backup key", async () => {
+    (await import("../server/gemini-keys")).resetKeyPool();
     process.env.GEMINI_API_KEY = "fallback-primary";
     process.env.GEMINI_API_KEY_BACKUP = "fallback-backup";
     const tried: string[] = [];

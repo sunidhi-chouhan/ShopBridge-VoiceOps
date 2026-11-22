@@ -15,6 +15,7 @@ import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import type { UserRecord } from "../store-types";
 import * as orchestrator from "./orchestrator";
+import { failureFromClose, keyRotation, markKeyFailed, markKeyOk } from "../gemini-keys";
 
 export type LiveDeps = {
   authenticate: (req: IncomingMessage) => Promise<UserRecord | null>;
@@ -118,15 +119,20 @@ export function attachLiveRelay(server: Server, deps: LiveDeps): WebSocketServer
   return wss;
 }
 
-/** Ordered (key, model) combinations to try: primary key then backup key, primary model then fallbacks. */
-export function geminiAttempts(): Array<{ key: string; keyIndex: number; model: string }> {
-  const keys = [process.env.GEMINI_API_KEY, process.env.GEMINI_API_KEY_BACKUP].map((k) => k?.trim()).filter((k): k is string => Boolean(k));
+/**
+ * Ordered (key, model) combinations to try for one session. Keys come from the shared pool in
+ * rotation order (healthy keys first), so sessions spread across every key. The primary model is
+ * tried on every key before the fallback model, because a key problem is far more common than a
+ * retired model and switching keys is instant.
+ */
+export function geminiAttempts(): Array<{ key: string; keyIndex: number; slot: number; model: string }> {
+  const keys = keyRotation();
   const primary = (process.env.GEMINI_LIVE_MODEL || "gemini-3.8-live").replace(/^models\//, "");
   const fallbacks = (process.env.GEMINI_LIVE_FALLBACK_MODELS ?? "gemini-3.1-flash-live-preview")
     .split(",").map((m) => m.trim().replace(/^models\//, "")).filter(Boolean);
   const models = [...new Set([primary, ...fallbacks])].slice(0, 2);
-  const out: Array<{ key: string; keyIndex: number; model: string }> = [];
-  keys.forEach((key, keyIndex) => models.forEach((model) => out.push({ key, keyIndex, model })));
+  const out: Array<{ key: string; keyIndex: number; slot: number; model: string }> = [];
+  models.forEach((model) => keys.forEach(({ key, slot }) => out.push({ key, keyIndex: slot - 1, slot, model })));
   return out;
 }
 
@@ -264,6 +270,7 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
 
     if (msg.setupComplete) {
       ready = true;
+      markKeyOk(attempts[attempt].key);
       for (const q of queue.splice(0)) g.send(q);
       sendJson(browser, { type: "ready", sessionId, model });
       return;
@@ -331,11 +338,13 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
 
   // A failure before setup completes (bad/expired key, quota, retired model) falls through to the next
   // key/model combination instead of ending the session.
-  const failed = (why: string) => {
+  const failed = (why: string, closeCode = 0, closeReason = "") => {
     if (g !== gemini || ended) return;
+    // Rest this key so the next sessions start on a healthy one (a retired model is not the key's fault).
+    if (!ready && !/model|not found|not supported/i.test(closeReason)) markKeyFailed(attempts[attempt].key, failureFromClose(closeCode, closeReason));
     if (!ready && attempt < attempts.length - 1) {
       attempt += 1;
-      console.warn(`Gemini Live attempt ${attempt} failed (${why}); trying ${attempts[attempt].model} with key #${attempts[attempt].keyIndex + 1}`);
+      console.warn(`Gemini Live attempt ${attempt} failed (${why}); trying ${attempts[attempt].model} with key #${attempts[attempt].slot}`);
       model = attempts[attempt].model;
       gemini = new WebSocket(`${GEMINI_URL()}?key=${encodeURIComponent(attempts[attempt].key)}`);
       bind(gemini);
@@ -348,7 +357,7 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
     console.error("Gemini Live socket error:", error.message);
     failed("gemini_error");
   });
-  g.on("close", (code) => failed(ready ? "gemini_closed" : `gemini_closed_${code}`));
+  g.on("close", (code, reason) => failed(ready ? "gemini_closed" : `gemini_closed_${code}`, code, String(reason ?? "")));
   };
   bind(gemini);
 
