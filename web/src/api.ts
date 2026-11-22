@@ -368,12 +368,12 @@ export type VoiceOverview = {
     pending_approvals: number;
     total_orders: number;
   };
-  activity: { total: number; succeeded: number; blocked: number; failed: number; human: number; avg_latency_ms: number };
+  activity: { total: number; succeeded: number; blocked: number; failed: number; human: number; auto_ok: number; human_ok: number; avg_latency_ms: number };
   usage: {
     sessions: number;
     input_minutes: number;
     output_minutes: number;
-    latency: { turns: number; p50_ms: number | null; p95_ms: number | null };
+    latency: { turns: number; p50_ms: number | null; p95_ms: number | null; recent_ms: number[] };
     workflows_completed: number;
     workflows_attempted: number;
     est_cost_usd: number | null;

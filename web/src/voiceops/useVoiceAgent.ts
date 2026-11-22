@@ -38,8 +38,13 @@ export function useVoiceAgent(onDataChanged: () => void) {
       case "ready":
         setStatus("live");
         setModel(event.model);
-        // Proactive start: the agent opens with what needs attention today.
-        client.current?.requestBriefing();
+        // Opened from a dashboard action: run that request. Otherwise brief the seller proactively.
+        if (firstCommand.current) {
+          client.current?.sendText(firstCommand.current);
+          firstCommand.current = null;
+        } else {
+          client.current?.requestBriefing();
+        }
         break;
       case "transcript":
         setTurns((prev) => {
@@ -105,7 +110,9 @@ export function useVoiceAgent(onDataChanged: () => void) {
     }
   }, []);
 
-  const start = useCallback(async () => {
+  const firstCommand = useRef<string | null>(null);
+  const start = useCallback(async (command?: string) => {
+    firstCommand.current = command ?? null;
     setError(null);
     setStatus("connecting");
     const live = new LiveClient(handle);
@@ -156,6 +163,8 @@ export function useVoiceAgent(onDataChanged: () => void) {
     status, error, micOn, turns, timeline, latencies, model, client,
     start, stop, toggleMic,
     sendText: (text: string) => client.current?.sendText(text),
+    /** Send a request to the agent, opening a session first if none is running. */
+    ask: (text: string) => (client.current?.open ? client.current.sendText(text) : void start(text)),
     approve: (id: string) => client.current?.approve(id),
     reject: (id: string) => client.current?.reject(id),
     undo: (actionId?: string) => client.current?.undo(actionId),

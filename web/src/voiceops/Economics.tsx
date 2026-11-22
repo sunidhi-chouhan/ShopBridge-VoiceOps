@@ -3,7 +3,6 @@ import { deleteVoiceBaseline, voiceBaselines, type VoiceBaselineRun, type VoiceO
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
-import { Metric, MetricGrid } from "../ui/Metric";
 import { useToast } from "../ui/Toast";
 import { BASELINE_TASKS, taskLabel } from "./baseline";
 import { useVoice } from "./VoiceContext";
@@ -103,7 +102,10 @@ function loadInputs(): Inputs {
   }
 }
 
-const inr = (n: number) => `₹${Math.round(n).toLocaleString("en-IN")}`;
+const inr = (n: number) => {
+  const r = Math.round(n);
+  return r < 0 ? `−₹${Math.abs(r).toLocaleString("en-IN")}` : `₹${(r || 0).toLocaleString("en-IN")}`;
+};
 
 /** Per-workflow unit numbers from this deployment's own data. */
 export function unitEconomics(u: Usage) {
@@ -119,6 +121,19 @@ export function unitEconomics(u: Usage) {
     costPerWorkflowUsd: u.est_cost_per_workflow_usd ?? 0,
     measuredShare: u.workflows_with_measured_baseline / done,
   };
+}
+
+function RoiTiles({ tiles }: { tiles: Array<[string, string, ("bad" | undefined)?]> }) {
+  return (
+    <div className="dash-econ" role="list">
+      {tiles.map(([label, value, tone]) => (
+        <div key={label} role="listitem" className={`dash-econ-tile${tone === "bad" ? " is-bad" : ""}`}>
+          <p className="dash-kpi-label">{label}</p>
+          <p className="dash-econ-value">{value}</p>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function RoiCalculator({ usage }: { usage: Usage }) {
@@ -190,21 +205,21 @@ export function RoiCalculator({ usage }: { usage: Usage }) {
         ))}
       </div>
       <p className="vo-hint">The fields above are your business inputs. Change them to your own numbers; they are saved in this browser only.</p>
-      <h3 className="vo-h3">Per seller, per month</h3>
-      <MetricGrid>
-        <Metric label="Hours saved" value={hoursSaved.toFixed(1)} />
-        <Metric label="Value of time saved" value={inr(valueSaved)} />
-        <Metric label="AI cost (audio, list price)" value={inr(aiCost)} />
-        <Metric label="Platform margin" value={inr(margin)} />
-        <Metric label="Seller net after price" value={inr(sellerNet)} />
-      </MetricGrid>
-      <h3 className="vo-h3">At {inputs.sellers.toLocaleString("en-IN")} sellers, per month</h3>
-      <MetricGrid>
-        <Metric label="Seller hours saved" value={Math.round(hoursSaved * inputs.sellers).toLocaleString("en-IN")} />
-        <Metric label="Revenue" value={inr(inputs.price * inputs.sellers)} />
-        <Metric label="AI spend" value={inr(aiCost * inputs.sellers)} />
-        <Metric label="Gross margin" value={inputs.price ? `${Math.round((margin / inputs.price) * 100)}%` : "–"} />
-      </MetricGrid>
+      <p className="dash-eyebrow">Per seller, per month</p>
+      <RoiTiles tiles={[
+        ["Hours saved", hoursSaved.toFixed(1)],
+        ["Value of time saved", inr(valueSaved)],
+        ["AI cost (audio, list price)", inr(aiCost)],
+        ["Platform margin", inr(margin), margin < 0 ? "bad" : undefined],
+        ["Seller net after price", inr(sellerNet), sellerNet < 0 ? "bad" : undefined],
+      ]} />
+      <p className="dash-eyebrow">At {inputs.sellers.toLocaleString("en-IN")} sellers, per month</p>
+      <RoiTiles tiles={[
+        ["Seller hours saved", Math.round(hoursSaved * inputs.sellers).toLocaleString("en-IN")],
+        ["Revenue", inr(inputs.price * inputs.sellers)],
+        ["AI spend", inr(aiCost * inputs.sellers)],
+        ["Gross margin", inputs.price ? `${Math.round((margin / inputs.price) * 100)}%` : "–", margin < 0 ? "bad" : undefined],
+      ]} />
       <p className="vo-hint">
         Voice time counts every second of audio in the sessions (greetings and lookups too), so savings are understated rather than overstated.
         AI cost excludes text tokens. Hosting, price, volume and the value of an hour are your assumptions.

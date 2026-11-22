@@ -15,12 +15,12 @@ import {
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
-import { Metric, MetricGrid } from "../ui/Metric";
 import { useToast } from "../ui/Toast";
 import type { TimelineItem } from "./useVoiceAgent";
 import { useVoiceAgent } from "./useVoiceAgent";
 import { useVoice } from "./VoiceContext";
 import { BaselineCard, RoiCalculator } from "./Economics";
+import { Attention, DashHero, DashSection, EconomicsTiles, KpiRow, LatencyChart, OutcomeBar } from "./Dashboard";
 import { AiStory } from "../ai/AiStory";
 
 type Tab = "agent" | "how" | "approvals" | "activity" | "overview";
@@ -401,7 +401,7 @@ function Preflight() {
   );
 }
 
-function OverviewTab({ tick, refresh, liveActive }: { tick: number; refresh: () => void; liveActive: boolean }) {
+function OverviewTab({ tick, refresh, liveActive, onOpenTab }: { tick: number; refresh: () => void; liveActive: boolean; onOpenTab: (t: Tab) => void }) {
   const [data, setData] = useState<VoiceOverview | null>(null);
   const [resetting, setResetting] = useState(false);
   const toast = useToast();
@@ -419,51 +419,50 @@ function OverviewTab({ tick, refresh, liveActive }: { tick: number; refresh: () 
   }
   useEffect(() => { voiceOverview().then(setData).catch(() => undefined); }, [tick]);
   if (!data) return <p className="vo-hint">Loading…</p>;
-  const { summary: s, activity: a, usage: u } = data;
-  const saved = Math.max(0, u.manual_seconds - u.voice_seconds);
-  const allMeasured = u.workflows_completed > 0 && u.workflows_with_measured_baseline === u.workflows_completed;
-  const done = a.succeeded;
   return (
-    <>
-      <h3 className="vo-h3">Today in your shop</h3>
-      <MetricGrid>
-        <Metric label="Awaiting dispatch" value={String(s.awaiting_dispatch)} />
-        <Metric label="Delayed over 24h" value={String(s.delayed.length)} />
-        <Metric label="Low-stock products" value={String(s.low_stock_products)} />
-        <Metric label="Open returns" value={String(s.open_returns)} />
-        <Metric label="Pending approvals" value={String(s.pending_approvals)} />
-      </MetricGrid>
-      <h3 className="vo-h3">What the agent has done (measured)</h3>
-      <MetricGrid>
-        <Metric label="Actions completed" value={String(done)} />
-        <Metric label="Blocked by policy" value={String(a.blocked)} />
-        <Metric label="Needed a human" value={String(a.human)} />
-        <Metric label="Failed" value={String(a.failed)} />
-        <Metric label="Avg tool time" value={`${a.avg_latency_ms} ms`} />
-      </MetricGrid>
-      <h3 className="vo-h3">Performance and economics</h3>
-      <MetricGrid>
-        <Metric label="Reply latency p50 / p95" value={u.latency.turns ? `${u.latency.p50_ms} / ${u.latency.p95_ms} ms` : "no turns yet"} />
-        <Metric label="Voice sessions" value={`${u.sessions} (${(u.input_minutes + u.output_minutes).toFixed(1)} audio min)`} />
-        <Metric label="Workflows done / tried" value={`${u.workflows_completed} / ${u.workflows_attempted}`} />
-        <Metric label="Cost per workflow" value={u.est_cost_per_workflow_usd !== null ? `$${u.est_cost_per_workflow_usd.toFixed(3)}` : "–"} />
-        <Metric label={allMeasured ? "Time saved (measured baseline)" : "Time saved (partly assumed baseline)"} value={u.workflows_completed ? `${Math.round(saved / 60)} min` : "–"} />
-        <Metric label="Taps: by hand / by voice" value={u.workflows_with_measured_baseline ? `${u.manual_taps} / ${u.voice_taps}` : "time a task first"} />
-      </MetricGrid>
-      <p className="vo-hint">Latency, minutes and counts are measured. Time saved compares voice audio time with the manual baseline below: measured where you have timed the task, assumed (90 to 240 s) where you have not. Cost is an audio-minutes estimate at Google's list price for Gemini 3.8 Live (${u.rate_in_per_min_usd}/min in, ${u.rate_out_per_min_usd}/min out), excluding text tokens.</p>
-      <BaselineCard usage={u} tick={tick} />
-      <RoiCalculator usage={u} />
-      <Digest />
-      <Preflight />
-      {data.demoEnabled ? (
-        <Card variant="compact" className="vo-demo">
-          <h3 className="vo-h3">Demo scenario</h3>
-          <p className="vo-msg">Restores seven demo orders (1042 return, 1050 already shipped, 1051 to 1053 delayed, 1054 past the return window, 1055 fresh), sets two products low on stock and clears the agent history.</p>
-          <Button variant="secondary" pending={resetting} disabled={liveActive} onClick={() => void reset()}>Reset demo scenario</Button>
-          {liveActive ? <p className="vo-hint">End the voice session first.</p> : null}
-        </Card>
-      ) : null}
-    </>
+    <div className="dash">
+      <DashHero data={data} onOpenTab={onOpenTab} />
+      <div className="dash-grid-2">
+        <Attention data={data} onOpenTab={onOpenTab} />
+        <div className="dash-stack-col">
+          <p className="dash-eyebrow dash-kpi-eyebrow">Today in your shop</p>
+          <KpiRow data={data} />
+        </div>
+      </div>
+
+      <DashSection title="Agent performance" sub="Measured from this shop's own sessions and audit log.">
+        <div className="dash-grid-2">
+          <LatencyChart data={data} />
+          <OutcomeBar data={data} />
+        </div>
+        <EconomicsTiles data={data} />
+        <p className="vo-hint dash-note">
+          Cost is an audio-minutes estimate at Google's list price for Gemini 3.8 Live (${data.usage.rate_in_per_min_usd}/min in, ${data.usage.rate_out_per_min_usd}/min out), excluding text tokens. Manual time is measured where a task has been timed and assumed (badged) where it has not.
+        </p>
+      </DashSection>
+
+      <DashSection title="Business case" sub="Measured unit numbers times your own business inputs.">
+        <RoiCalculator usage={data.usage} />
+        <BaselineCard usage={data.usage} tick={tick} />
+      </DashSection>
+
+      <DashSection title="Tools" sub="Gemini summaries, the pre-demo check and the demo data.">
+        <div className="dash-grid-2 dash-align-start">
+          <Digest />
+          <div className="dash-stack-col">
+            <Preflight />
+            {data.demoEnabled ? (
+              <Card variant="compact" className="vo-demo">
+                <h3 className="vo-h3">Demo scenario</h3>
+                <p className="vo-msg">Restores seven demo orders (1042 return, 1050 already shipped, 1051 to 1053 delayed, 1054 past the return window, 1055 fresh), sets two products low on stock and clears the agent history.</p>
+                <Button variant="secondary" pending={resetting} disabled={liveActive} onClick={() => void reset()}>Reset demo scenario</Button>
+                {liveActive ? <p className="vo-hint">End the voice session first.</p> : null}
+              </Card>
+            ) : null}
+          </div>
+        </div>
+      </DashSection>
+    </div>
   );
 }
 
@@ -507,7 +506,7 @@ export function VoiceOps() {
       ) : null}
       {tab === "approvals" ? <ApprovalsTab tick={tick} refresh={refresh} /> : null}
       {tab === "activity" ? <ActivityTab tick={tick} refresh={refresh} /> : null}
-      {tab === "overview" ? <OverviewTab tick={tick} refresh={refresh} liveActive={agent.status === "live" || agent.status === "connecting"} /> : null}
+      {tab === "overview" ? <OverviewTab tick={tick} refresh={refresh} liveActive={agent.status === "live" || agent.status === "connecting"} onOpenTab={openTab} /> : null}
     </div>
   );
 }

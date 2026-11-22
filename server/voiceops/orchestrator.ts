@@ -729,6 +729,8 @@ export async function overview(user: UserRecord) {
               count(*) FILTER (WHERE status = 'blocked')::int AS blocked,
               count(*) FILTER (WHERE status = 'failed')::int AS failed,
               count(*) FILTER (WHERE human_involved)::int AS human,
+              count(*) FILTER (WHERE status = 'succeeded' AND NOT human_involved)::int AS auto_ok,
+              count(*) FILTER (WHERE status = 'succeeded' AND human_involved)::int AS human_ok,
               COALESCE(round(avg(latency_ms))::int, 0) AS avg_latency_ms
          FROM voiceops_actions WHERE user_id = $1 AND tool NOT IN ('confirm_action','reject_action')`,
       [user.id],
@@ -820,7 +822,9 @@ async function baselineTable(client: pg.PoolClient): Promise<BaselineRow[]> {
 }
 
 async function usageFor(client: pg.PoolClient, sellerId: string) {
-  const sessions = (await client.query("SELECT input_audio_seconds, output_audio_seconds, latencies FROM voiceops_sessions WHERE user_id = $1", [sellerId])).rows;
+  const sessions = (await client.query("SELECT input_audio_seconds, output_audio_seconds, latencies FROM voiceops_sessions WHERE user_id = $1 ORDER BY started_at", [sellerId])).rows;
+  // Most recent reply times in the order they happened, for the dashboard's latency chart.
+  const recent = sessions.flatMap((s) => ((s.latencies as number[]) ?? []).map(Number)).slice(-40);
   const lat = sessions.flatMap((s) => (s.latencies as number[]) ?? []).map(Number).sort((a, b) => a - b);
   const pct = (p: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor((p / 100) * lat.length))] : null);
   const inMin = sessions.reduce((a, s) => a + Number(s.input_audio_seconds), 0) / 60;
@@ -860,7 +864,7 @@ async function usageFor(client: pg.PoolClient, sellerId: string) {
     sessions: sessions.length,
     input_minutes: Math.round(inMin * 100) / 100,
     output_minutes: Math.round(outMin * 100) / 100,
-    latency: { turns: lat.length, p50_ms: pct(50), p95_ms: pct(95) },
+    latency: { turns: lat.length, p50_ms: pct(50), p95_ms: pct(95), recent_ms: recent },
     workflows_completed: nCompleted,
     workflows_attempted: attempted.reduce((a, r) => a + r.n, 0),
     est_cost_usd: cost,
