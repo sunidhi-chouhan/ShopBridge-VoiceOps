@@ -25,3 +25,7 @@ npm-debug.log*
 # Test / coverage
 coverage/
 *.tsbuildinfo
+
+# Personal voice recordings for the demo video (never commit)
+recordings/
+video-build/

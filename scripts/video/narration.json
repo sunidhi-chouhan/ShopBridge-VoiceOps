@@ -1,0 +1,86 @@
+{
+  "voice": "Kore",
+  "style": "You are a warm, confident product-demo narrator with a light Indian English accent. Speak only in English at a natural, brisk pace. Read the following text word for word, exactly as written, and say nothing else:\n\n",
+  "scenes": [
+    {
+      "id": "s01_landing",
+      "title": "ShopBridge VoiceOps",
+      "text": "Meet Meera. She sells handmade goods from a small godown in Indore. Her hands are busy packing, the room is noisy, and she speaks Hinglish. ShopBridge VoiceOps lets her run her shop by voice, with Google Gemini doing the work and a server checking every step."
+    },
+    {
+      "id": "s02_seller",
+      "title": "The Voice AI workspace",
+      "text": "This is the seller's Voice AI. A Gemini Live agent listens to native audio, decides the next step, checks the shop's rules, and always asks before it changes anything."
+    },
+    {
+      "id": "s03_briefing",
+      "title": "A proactive briefing",
+      "text": "She just taps Start talking. Before she says a word, the agent briefs her on what needs attention today."
+    },
+    {
+      "id": "s04_batch",
+      "title": "One approval, many customers",
+      "text": "Three orders are late. Meera asks for an apology to every delayed customer. Watch: one read-back, one spoken yes, and three personalised messages go out."
+    },
+    {
+      "id": "s05_interrupt",
+      "title": "An exception, and an interruption",
+      "text": "Now she asks to cancel order ten fifty. It has already shipped, so the server blocks the cancel. While the agent explains, Meera changes her mind mid-sentence. The agent stops at once and drafts a delay message instead."
+    },
+    {
+      "id": "s06_noise",
+      "title": "Background noise and a self-correction",
+      "text": "In a noisy room, she corrects herself: ten fifty-two, no, ten fifty-three. The agent proposes only the corrected order, with the courier and tracking number."
+    },
+    {
+      "id": "s07_return",
+      "title": "Refund on hold, and undo",
+      "text": "A return for order ten forty-two, with the refund on hold. Money never moves automatically. And any change can be undone with one tap."
+    },
+    {
+      "id": "s08_human",
+      "title": "Out of policy: a human decides",
+      "text": "Order ten fifty-four is past its seven-day return window. The agent will not bend the rule. It escalates to a person instead."
+    },
+    {
+      "id": "s09_offer",
+      "title": "A special price, by voice",
+      "text": "A ten percent offer for a customer. The agent calculates the new price, reads it back, and posts the offer card after her yes. Deep discounts are blocked for a human."
+    },
+    {
+      "id": "s09b_tamil",
+      "title": "Tamil and Tanglish",
+      "text": "It works in Tamil and Tanglish too. The customer message is drafted in Tamil script."
+    },
+    {
+      "id": "s10_buyer",
+      "title": "The buyer sees it, in Hindi",
+      "text": "On the other side, the buyer reads Meera's message in her own language, Hindi, in the real order chat."
+    },
+    {
+      "id": "s11_replies",
+      "title": "Gemini smart replies",
+      "text": "When the buyer writes back in Hindi, Gemini suggests three replies from the actual conversation. Meera taps one and sends it."
+    },
+    {
+      "id": "s12_support",
+      "title": "Support: Gemini triage",
+      "text": "For support agents, Gemini reads every open case, ranks it by urgency and suggests a resolution. Shop policy can override the model. The agent uses the suggestion, and the buyer confirms."
+    },
+    {
+      "id": "s13_listing",
+      "title": "A listing from a photo",
+      "text": "New products start from a photo. Gemini looks at it and drafts the name, the description and a fair price. The seller reviews and decides."
+    },
+    {
+      "id": "s14_proof",
+      "title": "Measured, not claimed",
+      "text": "Everything is measured: reply time per turn, what the agent did and where a human stepped in, cost per workflow, and the business case at scale. Every Gemini call rotates across several API keys, so one bad key cannot stop the demo."
+    },
+    {
+      "id": "s15_close",
+      "title": "Say it once. The AI does the work.",
+      "text": "Voice in. Gemini decides. The server checks. The shop gets it done, and says so out loud. ShopBridge VoiceOps."
+    }
+  ]
+}
