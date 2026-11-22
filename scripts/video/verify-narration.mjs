@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 const env = {};
 for (const l of readFileSync(".env", "utf8").split("\n")) { const m = l.match(/^([A-Z0-9_]+)=(.*)$/); if (m) env[m[1]] = m[2].trim().replace(/^["']|["']$/g, ""); }
 const keys = [env.GEMINI_API_KEY, env.GEMINI_API_KEY_BACKUP, ...Array.from({ length: 8 }, (_, i) => env[`GEMINI_API_KEY_BACKUP_${i + 2}`])].filter(Boolean);
-const models = ["gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "gemini-flash-latest"];
+const models = ["gemini-3.5-transcribe", "gemini-2.5-flash", "gemini-3-flash-preview", "gemini-3.6-flash", "gemini-flash-latest"];
 const cfg = JSON.parse(readFileSync("scripts/video/narration.json", "utf8"));
 const NUM = { "1042": "ten forty two", "1050": "ten fifty", "1052": "ten fifty two", "1053": "ten fifty three", "1054": "ten fifty four", "7": "seven", "10": "ten" };
 const words = (s) => s.toLowerCase().replace(/\b\d+\b/g, (n) => NUM[n] ?? n).replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter(Boolean);
@@ -20,13 +20,18 @@ async function transcribe(file) {
   return "";
 }
 let bad = 0;
+let unchecked = 0;
 const only = process.argv.slice(2);
 for (const s of cfg.scenes) {
   if (only.length && !only.includes(s.id)) continue;
   const heard = await transcribe(`video-build/narration/${s.id}.wav`);
-  const want = words(s.text), got = new Set(words(heard));
-  const score = want.filter((w) => got.has(w)).length / want.length;
-  if (score < 0.85) bad++;
-  console.log(`${score >= 0.85 ? "OK " : "BAD"} ${score.toFixed(2)} ${s.id}${score < 0.85 ? `  heard: ${heard.slice(0, 120)}` : ""}`);
+  if (!heard) { unchecked++; console.log(`ERR could not transcribe ${s.id} (Gemini quota or outage); not regenerating`); continue; }
+  // Recall: script words present. Precision: no extra words (e.g. an instruction read aloud).
+  const want = words(s.text), heardWords = words(heard), got = new Set(heardWords), script = new Set(want);
+  const recall = want.filter((w) => got.has(w)).length / want.length;
+  const precision = heardWords.length ? heardWords.filter((w) => script.has(w)).length / heardWords.length : 0;
+  const ok = recall >= 0.85 && precision >= 0.85;
+  if (!ok) bad++;
+  console.log(`${ok ? "OK " : "BAD"} recall ${recall.toFixed(2)} precision ${precision.toFixed(2)} ${s.id}${ok ? "" : `  heard: ${heard.slice(0, 160)}`}`);
 }
-process.exit(bad ? 1 : 0);
+process.exit(unchecked ? 2 : bad ? 1 : 0);

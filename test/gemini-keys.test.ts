@@ -77,10 +77,11 @@ describe("Gemini key pool", () => {
     }) as typeof fetch;
     const first = await generateText({ system: "s", prompt: "p", temperature: 0, maxOutputTokens: 10, purpose: "test" });
     assert.equal(first.text, "ok");
-    assert.deepEqual(tried, ["k1", "k2", "k3", "k4"], "one attempt per failing key, then success");
+    // Rejected keys are left after one try; a key at quota (429 is per model) tries its other models first.
+    assert.deepEqual(tried, ["k1", "k2", "k3", "k3", "k3", "k3", "k4"]);
     tried.length = 0;
     await generateText({ system: "s", prompt: "p", temperature: 0, maxOutputTokens: 10, purpose: "test" });
-    assert.equal(tried[0], "k4", "next call skips the three resting keys");
+    assert.ok(!tried.slice(0, 2).some((k) => k === "k1" || k === "k2"), "next call skips the two rejected (resting) keys");
   });
 
   it("gives up only after every key has failed", async () => {

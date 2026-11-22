@@ -117,10 +117,13 @@ export async function resolveModel(key: string): Promise<string> {
 async function candidateModels(key: string): Promise<string[]> {
   const configured = [process.env.GEMINI_MODEL, process.env.GEMINI_TEXT_MODEL].map((m) => m?.trim()).filter((m): m is string => Boolean(m));
   const listed = await listFlashModels(key).catch(() => [] as string[]);
-  return [...new Set([...configured, ...listed.slice(0, 3), "gemini-flash-latest"])];
+  // Quotas are per model, so keep older and lighter models as late fallbacks.
+  return [...new Set([...configured, ...listed.slice(0, 3), "gemini-flash-latest", ...FALLBACK_MODELS])];
 }
 
 const MAX_ATTEMPTS = 8;
+/** Late fallbacks: each model has its own quota, so these often still answer when the newest are exhausted. */
+export const FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-3-flash-preview", "gemini-flash-lite-latest"];
 
 /**
  * One Gemini text call with fallbacks. A retired model (404), a busy model (429/5xx), a timeout or
@@ -151,7 +154,7 @@ export async function generateText(input: {
   });
   let attempts = 0;
   let sawEmpty = false;
-  const budget = Math.min(MAX_ATTEMPTS + keys.length * 2, 24);
+  const budget = Math.min(MAX_ATTEMPTS + keys.length * 4, 32);
   for (const { key } of keys) {
     for (const model of await candidateModels(key)) {
       if (attempts++ >= budget) break;
@@ -166,12 +169,13 @@ export async function generateText(input: {
         continue;
       }
       const keyFault = failureFromStatus(response.status);
-      if (keyFault) {
-        // This key is rejected or out of quota: rest it and move straight on to the next key.
+      if (keyFault === "invalid") {
+        // This key is rejected: rest it and move straight on to the next key.
         markKeyFailed(key, keyFault);
         break;
       }
-      if (!response.ok) continue; // retired (404) or busy (5xx) model: try the next model
+      // 429 (that model's quota), 404 (retired) or 5xx (busy): quotas are per model, so try the next model.
+      if (!response.ok) continue;
       markKeyOk(key);
       const json = (await response.json().catch(() => null)) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;

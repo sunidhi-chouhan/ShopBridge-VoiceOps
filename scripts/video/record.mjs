@@ -5,7 +5,7 @@
 // Needs: google-chrome, video-build/voice/*.wav (from recordings/), video-build/narration/*.wav (from tts.mjs).
 // Output: <out>/frames-{seller,buyer}/*.jpg, <out>/timeline.json, <out>/agent-*.webm
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -26,6 +26,7 @@ const narrationSec = (id) => durationOf(`video-build/narration/${id}.wav`);
 
 mkdirSync(OUT, { recursive: true });
 const timeline = [];
+const audioFiles = new Set();
 const log = (type, data = {}) => { const e = { t: now(), type, ...data }; timeline.push(e); console.log(new Date(e.t).toISOString().slice(11, 23), type, JSON.stringify(data)); };
 
 // ---------------------------------------------------------------------------
@@ -84,26 +85,26 @@ const SHIM = `(() => {
       if (target === ctx.destination && ctx !== vctx) {
         if (!ctx.__tap) {
           ctx.__tap = ctx.createMediaStreamDestination();
-          const chunks = []; const mr = new MediaRecorder(ctx.__tap.stream, { mimeType: "audio/webm;codecs=opus" });
-          mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-          const rec = { start: Date.now(), chunks, mr }; mr.onstart = () => { rec.start = Date.now(); };
-          mr.start(500); window.__rec.push(rec);
+          // Stream every chunk to the recorder process at once, so a page reload never loses the agent's audio.
+          const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+          const mr = new MediaRecorder(ctx.__tap.stream, { mimeType: "audio/webm;codecs=opus" });
+          let start = Date.now();
+          mr.onstart = () => { start = Date.now(); };
+          mr.ondataavailable = async (e) => {
+            if (!e.data.size) return;
+            const u = new Uint8Array(await e.data.arrayBuffer());
+            let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+            window.__sendAudio && window.__sendAudio(JSON.stringify({ id, start, b64: btoa(s) }));
+          };
+          mr.start(500);
+          window.__rec.push({ mr });
         }
         orig.call(this, ctx.__tap);
       }
     } catch (e) { console.warn("tap failed", e); }
     return r;
   };
-  window.__dumpRec = async () => {
-    const out = [];
-    for (const r of window.__rec) {
-      if (r.mr.state !== "inactive") await new Promise((res) => { r.mr.onstop = res; r.mr.stop(); });
-      const u = new Uint8Array(await new Blob(r.chunks, { type: "audio/webm" }).arrayBuffer());
-      let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
-      out.push({ start: r.start, b64: btoa(s) });
-    }
-    return JSON.stringify(out);
-  };
+  window.__flushRec = async () => { for (const r of window.__rec) if (r.mr.state !== "inactive") { r.mr.requestData(); } await new Promise((r) => setTimeout(r, 400)); };
 })();`;
 
 async function openPage(name) {
@@ -123,6 +124,13 @@ async function openPage(name) {
     },
   };
   handlers.set(sessionId, (method, params) => {
+    if (method === "Runtime.bindingCalled" && params.name === "__sendAudio") {
+      const { id, start, b64 } = JSON.parse(params.payload);
+      const file = `agent-${name}-${id}.webm`;
+      if (!audioFiles.has(file)) { audioFiles.add(file); timeline.push({ t: start, type: "agent_audio", page: name, file }); }
+      appendFileSync(path.join(OUT, file), Buffer.from(b64, "base64"));
+      return;
+    }
     if (method === "Page.screencastFrame") {
       const ts = Math.round(params.metadata.timestamp * 1000);
       writeFileSync(path.join(dir, `${ts}.jpg`), Buffer.from(params.data, "base64"));
@@ -132,6 +140,7 @@ async function openPage(name) {
   });
   await page.send("Page.enable");
   await page.send("Runtime.enable");
+  await page.send("Runtime.addBinding", { name: "__sendAudio" });
   await page.send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceScaleFactor: 1, mobile: false });
   await page.send("Emulation.setFocusEmulationEnabled", { enabled: true });
   await page.send("Page.addScriptToEvaluateOnNewDocument", { source: SHIM });
@@ -148,6 +157,7 @@ const J = JSON.stringify;
 
 async function goto(page, hash, { reload = true } = {}) {
   // Hash routes don't reload the page; reload so a changed sign-in takes effect.
+  await page.eval(`await window.__flushRec?.();`).catch(() => {});
   await page.send("Page.navigate", { url: `${BASE}/${hash}` });
   await sleep(600);
   if (reload) await page.send("Page.reload", { ignoreCache: false });
@@ -488,17 +498,9 @@ for (const s of scenes) {
 }
 log("end");
 
-// Collect the agent's audio from both pages.
-for (const page of [seller, buyer]) {
-  try {
-    const recs = JSON.parse(await page.eval(`return await window.__dumpRec();`));
-    recs.forEach((r, i) => {
-      const file = `agent-${page.name}-${i}.webm`;
-      writeFileSync(path.join(OUT, file), Buffer.from(r.b64, "base64"));
-      timeline.push({ t: r.start, type: "agent_audio", page: page.name, file });
-    });
-  } catch (e) { console.warn("could not collect audio from", page.name, e.message); }
-}
+// Flush the last audio chunks from both pages (everything else was streamed during the run).
+for (const page of [seller, buyer]) await page.eval(`await window.__flushRec?.();`).catch(() => {});
+await sleep(1500);
 await seller.send("Page.stopScreencast").catch(() => {});
 await buyer.send("Page.stopScreencast").catch(() => {});
 writeFileSync(path.join(OUT, "timeline.json"), JSON.stringify({ base: BASE, width: W, height: H, events: timeline.sort((a, b) => a.t - b.t) }, null, 2));

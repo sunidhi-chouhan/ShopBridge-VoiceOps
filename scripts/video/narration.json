@@ -1,6 +1,6 @@
 {
   "voice": "Kore",
-  "style": "You are a warm, confident product-demo narrator with a light Indian English accent. Speak only in English at a natural, brisk pace. Read the following text word for word, exactly as written, and say nothing else:\n\n",
+  "style": "",
   "scenes": [
     {
       "id": "s01_landing",

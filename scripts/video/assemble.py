@@ -101,14 +101,39 @@ def build_scene(r, sid, index):
     cuts.append((cursor, b0, 1.0) if fast_at is None else (fast_at, b0, SPEED))
     cuts = [c for c in cuts if c[1] - c[0] > 20]
 
+    # Trim narration pauses recorded for a longer narration than the current clip (speed 0 = dropped).
+    drops = []
+    for e in ev:
+        if e["type"] == "narration":
+            npath = f"video-build/narration/{e['id']}.wav"
+            if os.path.exists(npath):
+                with wave.open(npath) as w:
+                    now_dur = w.getnframes() / w.getframerate()
+                keep_until = e["t"] + (now_dur + 0.7) * 1000
+                recorded_until = e["t"] + (e.get("dur", now_dur) + 0.6) * 1000
+                if recorded_until - keep_until > 300:
+                    drops.append((keep_until, recorded_until))
+    for da, db in drops:
+        nxt = []
+        for a, b, sp in cuts:
+            if db <= a or da >= b or sp == 0:
+                nxt.append((a, b, sp))
+                continue
+            if a < da:
+                nxt.append((a, da, sp))
+            nxt.append((max(a, da), min(b, db), 0))
+            if db < b:
+                nxt.append((db, b, sp))
+        cuts = nxt
+
     def out_time(t):
         acc = 0.0
         for a, b, sp in cuts:
             if t <= a:
                 return acc
             if t <= b:
-                return acc + (t - a) / 1000 / sp
-            acc += (b - a) / 1000 / sp
+                return acc + ((t - a) / 1000 / sp if sp else 0)
+            acc += (b - a) / 1000 / sp if sp else 0
         return acc
 
     total = out_time(b0)
@@ -116,6 +141,8 @@ def build_scene(r, sid, index):
     bounds = sorted({t for t, _ in r.cameras if a0 < t < b0})
     entries = []
     for a, b, sp in cuts:
+        if sp == 0:
+            continue
         edges = [a] + [x for x in bounds if a < x < b] + [b]
         for i in range(len(edges) - 1):
             pa, pb = edges[i], edges[i + 1]
@@ -180,6 +207,8 @@ def build_scene(r, sid, index):
         s, e2 = int((a - a0) / 1000 * RATE) * 2, int((b - a0) / 1000 * RATE) * 2
         chunk = raw[s:e2]
         chunk = chunk + b"\x00" * max(0, (e2 - s) - len(chunk))
+        if sp == 0:
+            continue
         pcm += chunk if sp == 1.0 else b"\x00" * (int((e2 - s) / sp) // 2 * 2)
     cut = os.path.join(WORK, f"{index:02d}-{sid}-audio.wav")
     with wave.open(cut, "wb") as w:
@@ -195,7 +224,7 @@ def build_scene(r, sid, index):
         "drawtext=fontfile=" + FONT + ":text='Live recording · seller voice\\: real · agent\\: Gemini Live, unedited · narration\\: Gemini TTS':fontcolor=white@0.85:fontsize=18:box=1:boxcolor=black@0.45:boxborderw=8:x=w-tw-24:y=h-40",
     ]
     for a, b, sp in cuts:
-        if sp != 1.0:
+        if sp not in (0, 1.0):
             draws.append(
                 "drawtext=fontfile=" + FONT + f":text='Gemini text call · sped up {int(sp)}x':fontcolor=white:fontsize=26:box=1:boxcolor=0x4b45a8@0.85:boxborderw=14:x=w-tw-56:y=48:enable='between(t,{out_time(a):.2f},{out_time(b):.2f})'"
             )
