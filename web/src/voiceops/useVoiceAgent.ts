@@ -38,6 +38,8 @@ export function useVoiceAgent(onDataChanged: () => void) {
       case "ready":
         setStatus("live");
         setModel(event.model);
+        // Proactive start: the agent opens with what needs attention today.
+        client.current?.requestBriefing();
         break;
       case "transcript":
         setTurns((prev) => {

@@ -3,7 +3,7 @@
  * (owner note, team handover, or a customer-facing update). Facts come from the database only; the
  * model is told not to add numbers, dates or promises.
  */
-import { fetchWithTimeout } from "../assist";
+import { generateText } from "../assist";
 import { getPool } from "../db/pool";
 import { HttpError } from "../errors";
 import type { UserRecord } from "../store-types";
@@ -30,32 +30,13 @@ export async function dailyDigest(user: UserRecord, language: DigestLanguage, au
     )
   ).rows;
   const facts = { shop_today: summary, agent_activity: activity, changes_made_today: actions };
-  const body = JSON.stringify({
-    systemInstruction: {
-      parts: [{ text: "You write short business summaries for a small Indian online seller. Use ONLY the FACTS provided. Never invent numbers, dates, names, promises or tracking details. At most 90 words, plain text, no markdown." }],
-    },
-    contents: [{ role: "user", parts: [{ text: `FACTS (JSON):\n${JSON.stringify(facts)}\n\nWrite this for ${DIGEST_AUDIENCES[audience]}. Language: ${DIGEST_LANGUAGES[language]}.` }] }],
-    generationConfig: { temperature: 0.3, maxOutputTokens: 500 },
+  const { text, model } = await generateText({
+    system: "You write short business summaries for a small Indian online seller. Use ONLY the FACTS provided. Never invent numbers, dates, names, promises or tracking details. At most 90 words, plain text, no markdown.",
+    prompt: `FACTS (JSON):\n${JSON.stringify(facts)}\n\nWrite this for ${DIGEST_AUDIENCES[audience]}. Language: ${DIGEST_LANGUAGES[language]}.`,
+    temperature: 0.3,
+    // Newer Flash models spend part of this budget on reasoning; the prompt caps the text at 90 words.
+    maxOutputTokens: 2048,
+    purpose: "digest",
   });
-  // The auto-picked "newest Flash" model was unreliable on this key, so use an explicit, ordered list.
-  const models = [...new Set([process.env.GEMINI_TEXT_MODEL?.trim(), "gemini-2.5-flash", "gemini-flash-latest"].filter((m): m is string => Boolean(m)))];
-  const keys = [process.env.GEMINI_API_KEY?.trim(), process.env.GEMINI_API_KEY_BACKUP?.trim()].filter((k): k is string => Boolean(k));
-  for (const apiKey of keys) {
-    for (const model of models) {
-      try {
-        const response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-          body,
-        });
-        if (!response.ok) continue;
-        const json = (await response.json().catch(() => null)) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> } | null;
-        const text = (json?.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
-        if (text) return { text, model, facts };
-      } catch {
-        /* timeout or network error: try the next model or key */
-      }
-    }
-  }
-  throw new HttpError(502, "AI_UNAVAILABLE", "The AI service could not write the digest right now.");
+  return { text, model, facts };
 }

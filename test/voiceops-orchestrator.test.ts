@@ -190,6 +190,45 @@ describe("VoiceOps orchestrator (Postgres)", { skip: available ? false : PG_SKIP
     assert.ok(ov.activity.blocked > 0 && ov.activity.succeeded > 0 && ov.activity.human > 0);
   });
 
+  it("makes a guarded special-price offer that posts the offer card and can be withdrawn", async () => {
+    await sql(url, "INSERT INTO orders (id,buyer_id,seller_id,status,total,channel_id,created_at) VALUES ('o_offer','ubuyer','useller','placed',1000,'chan_offer',now())");
+    await sql(url, "INSERT INTO order_items (order_id,product_id,seller_id,name,quantity,price) VALUES ('o_offer','p3','useller','offer item',1,1000)");
+    const n = ((await ask("list_orders", { limit: 20 })).data as any).orders.find((x: any) => x.items[0] === "offer item x1").order_no;
+    assert.equal((await ask("make_offer", { order_no: n, amount: 400 })).code, "OFFER_TOO_DEEP");
+    assert.equal((await ask("make_offer", { order_no: n, amount: 1200 })).code, "OFFER_NOT_LOWER");
+    assert.equal((await ask("make_offer", { order_no: no.o_shipped, amount: 100 })).code, "OFFER_AFTER_DISPATCH");
+    const r = await ask("make_offer", { order_no: n, amount: 850, note: "Festive price" });
+    assert.match(r.approval!.readback, /INR 850 .* \(was INR 1,000\)/);
+    assert.equal((await sql(url, "SELECT offer_state FROM orders WHERE id = 'o_offer'")).rows[0].offer_state, null, "nothing before approval");
+    const before = sent.length;
+    assert.equal((await approve(r)).status, "succeeded");
+    const row = (await sql(url, "SELECT offer_state, offer_amount, original_total FROM orders WHERE id = 'o_offer'")).rows[0];
+    assert.deepEqual([row.offer_state, Number(row.offer_amount), Number(row.original_total)], ["open", 850, 1000]);
+    assert.equal(sent.at(-1)!.channel, "chan_offer");
+    assert.ok(sent.length > before);
+    assert.equal((await ask("make_offer", { order_no: n, amount: 800 })).code, "OFFER_ALREADY_OPEN");
+    assert.equal((await ask("undo_action")).status, "succeeded");
+    assert.equal((await sql(url, "SELECT offer_state FROM orders WHERE id = 'o_offer'")).rows[0].offer_state, null);
+  });
+
+  it("notifies every delayed customer with one approval", async () => {
+    await sql(url, "INSERT INTO orders (id,buyer_id,seller_id,status,total,channel_id,created_at) VALUES ('o_late2','ubuyer','useller','placed',300,'chan_late2',now() - interval '40 hours')");
+    await sql(url, "INSERT INTO order_items (order_id,product_id,seller_id,name,quantity,price) VALUES ('o_late2','p3','useller','late item',1,300)");
+    const delayed = ((await ask("list_orders", { delayed_only: true, limit: 20 })).data as any).orders.map((o: any) => o.order_no);
+    assert.ok(delayed.length >= 1);
+    assert.equal((await ask("notify_delayed_customers", { message: "hi" })).code, "EMPTY_MESSAGE");
+    const r = await ask("notify_delayed_customers", { message: "your order is running a day late. Sorry for the wait." });
+    assert.equal(r.status, "awaiting_approval");
+    assert.match(r.approval!.readback, new RegExp(`Send ${delayed.length} delayed customer`));
+    const before = sent.length;
+    const done: any = await approve(r);
+    assert.equal(done.status, "succeeded");
+    assert.deepEqual(done.data.notified.sort(), delayed.sort());
+    const batch = sent.slice(before);
+    assert.equal(batch.length, delayed.length, "one message per delayed order, one approval");
+    assert.ok(batch.every((m) => /Hi \S+, your order is running a day late/.test(m.text)));
+  });
+
   it("prices time saved with measured manual runs, falling back to labelled assumptions", async () => {
     const before: any = (await o.overview(seller)).usage;
     assert.ok(before.baseline.every((b: any) => b.source === "assumed" && b.runs === 0));

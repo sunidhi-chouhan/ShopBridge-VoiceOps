@@ -1672,14 +1672,14 @@ input[type="radio"] {
 @media (min-width: 960px) {
   .hall {
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto 1fr auto;
   }
   .hall-stage {
     grid-template-columns: minmax(0, 1.32fr) minmax(340px, 0.78fr);
     align-items: center;
     gap: 56px;
-    padding: 2vh 7% 8vh;
-    min-height: calc(100vh - 92px);
+    padding: 2vh 7% 5vh;
+    min-height: calc(100vh - 136px);
   }
   .hall-title { font-size: clamp(2.8rem, 4.8vw, 4.65rem); }
   .hall-enter {
@@ -4322,3 +4322,37 @@ html, body, #root {
 .vo-ailoop li.is-past { color: var(--ink); border-color: var(--ai-violet-soft); }
 .vo-ailoop li.is-now { background: var(--ai-violet); border-color: var(--ai-violet); color: #fff; }
 :root[data-theme="dark"] .vo-ailoop li.is-now { color: #14122a; }
+
+/* Landing: AI headline + chat app hero pieces (rotating language, live board) */
+.landing .hero-lang { margin: 0; }
+.landing .hero-lang .line-lang { font-size: 0.5em; }
+@media (min-width: 1200px) {
+  .landing .hall-hero > .kicker, .landing .hall-hero > .hero-lang { grid-column: 1 / -1; }
+  .landing .hall-hero > .hero-board-wrap { grid-row: 4 / span 4; margin-top: 4px; }
+}
+.vo-dock.is-raised { bottom: 96px; }
+@media (max-width: 767px) { .vo-dock.is-raised { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); } }
+
+/* Gemini branding: the AI features are Google Gemini; label them as such. */
+.demo-tag.is-ai { background: var(--ai-violet-soft); color: var(--ai-violet); }
+.gemini-mark { margin-left: auto; margin-right: 20px; display: inline-flex; gap: 6px; align-items: center; font-family: var(--ai-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ai-violet); background: var(--ai-violet-soft); padding: 6px 12px; border-radius: 999px; }
+@media (max-width: 640px) { .gemini-mark { margin-right: 10px; padding: 5px 9px; font-size: 10px; } }
+
+/* Gemini triage (support queue and case brief) */
+.triage { display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; background: var(--ai-violet-soft); border: 1px solid rgb(var(--hair-rgb) / 0.12); margin: 10px 0; }
+.triage.is-empty { gap: 2px; }
+.triage-k { margin: 0; font-family: var(--ai-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ai-violet); }
+.triage-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.triage-summary { margin: 0; line-height: 1.45; }
+.triage-suggest { display: grid; gap: 6px; padding-top: 8px; border-top: 1px dashed rgb(var(--hair-rgb) / 0.2); }
+.triage-suggest p { margin: 0; }
+.triage-suggest .ix-btn { justify-self: start; }
+.triage-reasons { margin: 0; padding-left: 18px; color: var(--muted); font-size: 0.9rem; }
+.triage-policy { color: var(--warning); font-size: 0.9rem; }
+.triage-foot { margin: 0; font-size: 0.8rem; }
+.queue-ai { display: block; margin-top: 4px; font-size: 0.8rem; line-height: 1.35; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.queue-ai span { color: var(--ai-violet); }
+.queue-ai.is-high span { color: var(--danger); }
+.ai-listing { display: grid; gap: 10px; padding: 14px 16px; border-radius: 12px; background: var(--ai-violet-soft); border: 1px solid rgb(var(--hair-rgb) / 0.12); }
+.ai-listing .hint, .ai-listing .meta { margin: 0; }
+.ai-listing .btn { justify-self: start; }

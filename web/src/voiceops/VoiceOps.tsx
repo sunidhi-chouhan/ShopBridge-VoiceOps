@@ -36,6 +36,8 @@ const TOOL_LABEL: Record<string, string> = {
   send_customer_message: "Message customer",
   adjust_stock: "Adjust stock",
   request_human_review: "Ask a human",
+  make_offer: "Offer special price",
+  notify_delayed_customers: "Notify delayed customers",
   undo_action: "Undo",
 };
 const label = (tool: string) => TOOL_LABEL[tool] ?? tool.replace(/_/g, " ");
@@ -66,6 +68,8 @@ const SUGGESTIONS = [
   "Jo orders 24 ghante se dispatch nahi hue, unko dikhao.",
   "Order 1004 ko packed mark kar do.",
   "Order 1003 cancel kar do.",
+  "Sab delayed customers ko sorry ka message bhej do.",
+  "Order 1055 pe Asha ko 10% discount ka offer do.",
 ];
 
 function argsLine(args: Record<string, unknown>): string {
@@ -358,7 +362,7 @@ function Digest() {
   }
   return (
     <Card variant="compact" className="vo-demo">
-      <h3 className="vo-h3">Daily digest (any language, any audience)</h3>
+      <h3 className="vo-h3">Daily digest by Gemini (any language, any audience)</h3>
       <p className="vo-msg">Turns today's agent activity into a short note for the owner, the packing team or waiting customers.</p>
       <div className="vo-actions">
         <select aria-label="Language" value={language} onChange={(e) => setLanguage(e.target.value)} className="vo-select">

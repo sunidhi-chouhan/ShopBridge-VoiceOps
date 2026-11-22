@@ -5,6 +5,8 @@ export const BASELINE_TASKS: Array<{ task: string; label: string; how: string }>
   { task: "adjust_stock", label: "Adjust stock", how: "Open Products, find the item, edit its stock and save." },
   { task: "cancel_order", label: "Cancel an order", how: "Find the order, check it has not shipped, cancel it." },
   { task: "create_return", label: "Start a return", how: "Find the order, check the return window, record the return and tell the customer." },
+  { task: "make_offer", label: "Offer a special price", how: "Find the order, open its chat, send a price offer with a note." },
+  { task: "notify_delayed_customers", label: "Tell all delayed customers", how: "Find every order not dispatched in 24 h, open each chat and send a delay update." },
 ];
 
 export const taskLabel = (task: string) => BASELINE_TASKS.find((t) => t.task === task)?.label ?? task;

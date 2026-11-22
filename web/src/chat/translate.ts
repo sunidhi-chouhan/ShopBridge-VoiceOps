@@ -116,7 +116,7 @@ export async function syncNexconnTranslationLanguage(targetLanguage: string): Pr
   ensureTranslateHandler();
   const result = await NCEngine.translateModule.setTranslationLanguage(targetLanguage);
   if (!result.isOk) {
-    throw new Error("Could not set the Nexconn translation language. Check Console Translation enablement.");
+    throw new Error("Could not set the translation language. Check that translation is enabled for this app.");
   }
 }
 

@@ -101,4 +101,33 @@ describe("AI reply drafting", () => {
     assert.ok(!generate.url.includes("test-key"));
     assert.ok(generate.body.systemInstruction.parts[0].text.includes("Use ONLY facts"));
   });
+
+  it("falls back past retired and busy models, and to the backup key", async () => {
+    process.env.GEMINI_API_KEY = "fallback-primary";
+    process.env.GEMINI_API_KEY_BACKUP = "fallback-backup";
+    const tried: string[] = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const key = ((init?.headers ?? {}) as Record<string, string>)["x-goog-api-key"];
+      if (url.includes("/models?")) {
+        return new Response(JSON.stringify({ models: [
+          { name: "models/gemini-9.1-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-9.0-flash", supportedGenerationMethods: ["generateContent"] },
+        ] }));
+      }
+      const model = url.match(/models\/([^:]+):/)![1];
+      tried.push(`${key}:${model}`);
+      if (key === "fallback-primary") return new Response("{}", { status: 403 });
+      if (model === "gemini-9.1-flash") return new Response("{}", { status: 404 });
+      if (model === "gemini-9.0-flash") return new Response("{}", { status: 503 });
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "Sorry for the delay." }] } }] }));
+    }) as typeof fetch;
+    try {
+      const result = await draftReply({ order, support, transcript: [], language: "en" });
+      assert.equal(result.draft, "Sorry for the delay.");
+      assert.equal(result.model, "gemini-flash-latest");
+      assert.deepEqual(tried, ["fallback-primary:gemini-9.1-flash", "fallback-backup:gemini-9.1-flash", "fallback-backup:gemini-9.0-flash", "fallback-backup:gemini-flash-latest"]);
+    } finally {
+      delete process.env.GEMINI_API_KEY_BACKUP;
+    }
+  });
 });

@@ -6,6 +6,7 @@ import type {
   ConversationView,
   HelpRequestView,
   Language,
+  LiveView,
   OrderStatus,
   OrderView,
   ProductView,
@@ -282,6 +283,76 @@ export function draftSupportReply(
     method: "POST",
     body: JSON.stringify({ transcript, language }),
   });
+}
+
+// ---- Gemini listing drafts ----
+
+export type ListingDraft = { name: string; description: string; category: Category; priceSuggestion: number | null; priceReason: string; model: string };
+
+export function draftListing(image: string, note: string): Promise<{ draft: ListingDraft }> {
+  return request("/api/seller/products/draft", { method: "POST", body: JSON.stringify({ image, note }) });
+}
+
+// ---- Gemini smart replies ----
+
+export function suggestReplies(
+  orderId: string,
+  transcript: Array<{ role: string; text: string }>,
+  language: Language,
+): Promise<{ replies: string[]; model: string | null }> {
+  return request(`/api/orders/${orderId}/replies`, { method: "POST", body: JSON.stringify({ transcript, language }) });
+}
+
+// ---- Gemini support triage ----
+
+export type CaseTriage = {
+  summary: string;
+  issue: string;
+  urgency: "high" | "medium" | "low";
+  mood: "calm" | "worried" | "upset" | "angry";
+  suggestion: { resolution: "replacement" | "refund" | "return" | "info"; note: string };
+  reasons: string[];
+  policyNote: string | null;
+  facts: { status: string; daysSinceDelivery: number | null; returnWindowOpen: boolean | null; waitingHours: number };
+  model: string;
+  at: string;
+};
+
+export function triageQueue(): Promise<{ triage: Record<string, CaseTriage>; failed: string[] }> {
+  return request("/api/requests/triage", { method: "POST", body: "{}" });
+}
+
+export function triageCase(
+  requestId: string,
+  transcript: Array<{ role: string; text: string }>,
+): Promise<{ triage: CaseTriage }> {
+  return request(`/api/requests/${requestId}/triage`, { method: "POST", body: JSON.stringify({ transcript }) });
+}
+
+// ---- Live sale rooms ----
+
+export function listLive(): Promise<{ sessions: LiveView[] }> {
+  return request("/api/live");
+}
+
+export function getLive(id: string): Promise<{ session: LiveView }> {
+  return request(`/api/live/${id}`);
+}
+
+export function startLive(title: string, productId: string | null): Promise<{ session: LiveView }> {
+  return request("/api/live", { method: "POST", body: JSON.stringify({ title, productId }) });
+}
+
+export function featureLive(id: string, productId: string): Promise<{ session: LiveView }> {
+  return request(`/api/live/${id}/feature`, { method: "POST", body: JSON.stringify({ productId }) });
+}
+
+export function endLive(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/live/${id}/end`, { method: "POST", body: "{}" });
+}
+
+export function buyLive(id: string, productId: string): Promise<{ order: OrderView; session: LiveView }> {
+  return request(`/api/live/${id}/buy`, { method: "POST", body: JSON.stringify({ productId }) });
 }
 
 // ---------------------------------------------------------------------------

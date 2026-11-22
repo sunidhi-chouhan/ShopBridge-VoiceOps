@@ -28,6 +28,22 @@ Nexconn order chat -> spoken confirmation, transcript, action timeline and Activ
   automated. **Undo** is available for status, cancel, return and stock changes.
 - **Visibility:** live tool timeline with milliseconds, approval cards, Activity log marking human involvement, Overview metrics.
 
+### Where Gemini automates the work (all suggestions or approved actions; nothing moves money)
+| Who | Automation | Gemini | Human control |
+|---|---|---|---|
+| Seller | Voice agent: orders, status, cancel, returns, stock, customer messages, undo | Gemini Live native audio + function calling | Spoken or tapped approval of every change |
+| Seller | Proactive briefing when a session opens (delayed orders, low stock, pending approvals) | Gemini Live | Agent only suggests the next step |
+| Seller | One approval sends a personalised delay update to every delayed customer | Gemini Live | One read-back, one yes |
+| Seller | Special-price offers by voice (offer card posted to the buyer) | Gemini Live | Approval; over 50% off is blocked and goes to a human |
+| Seller | Product listing drafted from the cover photo (name, description, category, price suggestion) | Gemini Flash vision | Seller reviews, sets the price, saves |
+| Seller, support | Smart replies written from the live conversation, in the user's language | Gemini Flash | Tap to put in the composer, edit, send |
+| Support | Triage of every open case: summary, urgency, buyer mood, suggested resolution; queue sorted by urgency | Gemini Flash (JSON) | Policy overrides the model (no return outside 7 days; refunds always human); agent proposes, buyer confirms |
+| Support | Reply drafts grounded in the order record | Gemini Flash | Agent edits and sends |
+| Owner, team, customers | Daily digest in English, Hindi, Tamil, Hinglish | Gemini Flash | Read-only, from database facts |
+
+Text features try the configured model, then the newest available Flash models, then `gemini-flash-latest`, on both keys, so a retired
+or busy model does not take a feature down.
+
 ## 4. Commercial viability
 The ROI case is built from per-workflow unit numbers this app measures itself, multiplied by business inputs you set.
 Everything is on **Voice > Overview**.

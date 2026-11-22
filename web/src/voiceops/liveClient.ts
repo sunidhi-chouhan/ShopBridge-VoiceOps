@@ -108,6 +108,11 @@ export class LiveClient {
     if (this.open) this.send({ type: "audio_end" });
   }
 
+  /** Ask the agent for a short proactive briefing (once per session). */
+  requestBriefing(): void {
+    this.send({ type: "brief" });
+  }
+
   sendText(text: string): void {
     this.send({ type: "text", text });
   }

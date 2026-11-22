@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatInr } from "../../../shared/catalog";
 import type { HelpRequestView, OrderView } from "../../../shared/types";
-import { draftSupportReply } from "../api";
+import { draftSupportReply, triageCase, type CaseTriage } from "../api";
+import { TriageCard } from "./TriageCard";
 import { useSession } from "../app/session";
 import { languageLabel } from "../chat/languagePrefs";
 import { systemText, type ChatLine } from "../chat/nexconn";
@@ -25,10 +26,13 @@ export function CaseBrief({
   order,
   support,
   lines,
+  onUseSuggestion,
 }: {
   order: OrderView;
   support: HelpRequestView;
   lines: ChatLine[];
+  /** Fills the proposal form with Gemini's suggested resolution (the agent still decides). */
+  onUseSuggestion?: (resolution: CaseTriage["suggestion"]["resolution"], note: string) => void;
 }) {
   const { language } = useSession();
   const [noteTranslation, setNoteTranslation] = useState<string | null>(null);
@@ -69,26 +73,52 @@ export function CaseBrief({
   const lastBuyerTranslated = facts.lastBuyer ? getCachedTranslation(facts.lastBuyer.id, language) : null;
   const item = order.items[0];
 
+  function buildTranscript() {
+    return lines
+      .filter((line) => line.kind === "text")
+      .slice(-30)
+      .map((line) => {
+        const role = line.system
+          ? "event"
+          : line.senderId === order.buyer.id
+            ? "buyer"
+            : line.senderId === order.seller.id
+              ? "seller"
+              : "support";
+        const cached = getCachedTranslation(line.id, language);
+        const text = line.system ? systemText(line.text) : line.text;
+        const translated = cached.status === "ready" && cached.text !== line.text ? ` [${languageLabel(language)}: ${cached.text}]` : "";
+        return { from: role, role, text: `${text}${translated}`.slice(0, 600) };
+      });
+  }
+
+  // Gemini triage runs automatically when the agent opens the case, and again when new messages arrive.
+  const [triage, setTriage] = useState<CaseTriage | null>(null);
+  const [triaging, setTriaging] = useState(false);
+  const [triageError, setTriageError] = useState<string | null>(null);
+  const textCount = lines.filter((line) => line.kind === "text").length;
+  useEffect(() => {
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      setTriaging(true);
+      setTriageError(null);
+      triageCase(support.id, buildTranscript())
+        .then((result) => alive && setTriage(result.triage))
+        .catch((caught: unknown) => alive && setTriageError(caught instanceof Error ? caught.message : "Gemini triage is unavailable."))
+        .finally(() => alive && setTriaging(false));
+    }, 600);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [support.id, support.status, textCount]);
+
   async function onDraft() {
     setDrafting(true);
     setDraftError(null);
     try {
-      const transcript = lines
-        .filter((line) => line.kind === "text")
-        .slice(-30)
-        .map((line) => {
-          const role = line.system
-            ? "event"
-            : line.senderId === order.buyer.id
-              ? "buyer"
-              : line.senderId === order.seller.id
-                ? "seller"
-                : "support";
-          const cached = getCachedTranslation(line.id, language);
-          const text = line.system ? systemText(line.text) : line.text;
-          const translated = cached.status === "ready" && cached.text !== line.text ? ` [${languageLabel(language)}: ${cached.text}]` : "";
-          return { from: role, role, text: `${text}${translated}`.slice(0, 600) };
-        });
+      const transcript = buildTranscript();
       const result = await draftSupportReply(support.id, transcript, language);
       setDraft({ text: result.draft, model: result.model });
     } catch (caught: unknown) {
@@ -107,6 +137,7 @@ export function CaseBrief({
       </button>
       {open ? (
         <>
+          <TriageCard triage={triage} pending={triaging} error={triageError} onUse={onUseSuggestion} />
           <dl className="case-brief-facts">
             <div>
               <dt>Order</dt>
@@ -178,10 +209,10 @@ export function CaseBrief({
           ) : null}
           <div className="case-brief-ai">
             <Button variant="secondary" pending={drafting} onClick={() => void onDraft()}>
-              Draft a reply with AI
+              Draft a reply with Gemini
             </Button>
             <p className="meta">
-              Suggestion only. Uses the order record and this conversation; you review, edit and send it yourself.
+              Suggestion from Google Gemini only. Uses the order record and this conversation; you review, edit and send it yourself.
             </p>
             {draftError ? (
               <p className="field-error" role="alert">
@@ -190,7 +221,7 @@ export function CaseBrief({
             ) : null}
             {draft ? (
               <div className="case-brief-draft">
-                <p className="kicker">Draft · AI ({draft.model}) · not sent</p>
+                <p className="kicker">Draft · Gemini ({draft.model}) · not sent</p>
                 <p>{draft.text}</p>
                 <div className="dialog-actions">
                   <Button variant="quiet" onClick={() => setDraft(null)}>

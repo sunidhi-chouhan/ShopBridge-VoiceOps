@@ -1,5 +1,5 @@
 // Real end-to-end smoke test of the relay against Gemini Live.
-// Usage: BASE=http://127.0.0.1:8791 node scripts/voiceops-live-smoke.mjs "text to say" [--audio]
+// Usage: BASE=http://127.0.0.1:8791 node scripts/voiceops-live-smoke.mjs "text to say" [--audio | --brief]
 // --audio: synthesize the sentence with Gemini Live itself, resample 24k->16k and stream it as "mic" audio.
 import { readFileSync } from "node:fs";
 import WebSocket from "ws";
@@ -55,7 +55,8 @@ ws.on("message", async (d, bin) => {
       for (let i = 0; i < pcm.length; i += 3200) { ws.send(pcm.subarray(i, i + 3200), { binary: true }); await new Promise((r) => setTimeout(r, 100)); }
       bump();
       for (let i = 0; i < 20; i++) { ws.send(Buffer.alloc(3200), { binary: true }); await new Promise((r) => setTimeout(r, 100)); } // paced silence so VAD closes the turn
-    } else ws.send(JSON.stringify({ type: "text", text: say }));
+    } else if (process.argv.includes("--brief")) ws.send(JSON.stringify({ type: "brief" })); // what the seller's screen sends on open
+    else ws.send(JSON.stringify({ type: "text", text: say }));
   }
 });
 ws.on("close", () => { console.log(stamp(), "socket closed"); process.exit(0); });

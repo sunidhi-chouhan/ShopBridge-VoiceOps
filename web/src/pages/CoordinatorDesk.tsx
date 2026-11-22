@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HelpRequestView, RequestStatus } from "../../../shared/types";
 import { STATUSES } from "../../../shared/types";
-import { claimOrderSupport, listRequests } from "../api";
+import { claimOrderSupport, listRequests, triageQueue, type CaseTriage } from "../api";
+import { TriageCard } from "../conversation/TriageCard";
 import { usePresence } from "../chat/presence";
 import { StatusTrail } from "../components/StatusTrail";
 import { copy, statusLabel } from "../copy";
@@ -27,6 +28,9 @@ export function CoordinatorDesk() {
   const [, go] = useRoute();
   const presence = usePresence();
   const toast = useToast();
+  const [triage, setTriage] = useState<Record<string, CaseTriage>>({});
+  const [triaging, setTriaging] = useState(false);
+  const [triageError, setTriageError] = useState<string | null>(null);
 
   async function refresh() {
     const result = await listRequests();
@@ -51,10 +55,41 @@ export function CoordinatorDesk() {
     };
   }, []);
 
+  // Gemini triages every open case automatically (cached on the server; only new or changed cases cost a call).
+  const openKey = (requests ?? []).filter((item) => item.status !== "completed").map((item) => `${item.id}:${item.status}`).join(",");
+  useEffect(() => {
+    if (!openKey) return;
+    let alive = true;
+    setTriaging(true);
+    triageQueue()
+      .then((result) => {
+        if (!alive) return;
+        setTriage((prev) => ({ ...prev, ...result.triage }));
+        setTriageError(result.failed.length ? "Gemini could not triage some cases right now." : null);
+      })
+      .catch((caught: unknown) => alive && setTriageError(caught instanceof Error ? caught.message : "Gemini triage is unavailable."))
+      .finally(() => alive && setTriaging(false));
+    return () => {
+      alive = false;
+    };
+  }, [openKey]);
+
   const all = requests ?? [];
+  const URGENCY_RANK = { high: 0, medium: 1, low: 2 } as const;
   const filtered = useMemo(
-    () => all.filter((item) => !statusFilter || item.status === statusFilter),
-    [all, statusFilter],
+    () =>
+      all
+        .filter((item) => !statusFilter || item.status === statusFilter)
+        .slice()
+        .sort((a, b) => {
+          // Open cases first, most urgent (per Gemini) first, then longest waiting.
+          const done = Number(a.status === "completed") - Number(b.status === "completed");
+          if (done) return done;
+          const ra = triage[a.id] ? URGENCY_RANK[triage[a.id].urgency] : 1;
+          const rb = triage[b.id] ? URGENCY_RANK[triage[b.id].urgency] : 1;
+          return ra - rb || a.createdAt.localeCompare(b.createdAt);
+        }),
+    [all, statusFilter, triage],
   );
   const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0] ?? null;
 
@@ -88,8 +123,8 @@ export function CoordinatorDesk() {
         <p className="kicker">Support</p>
         <h1 className="page-title">Queue.</h1>
         <p className="lede">
-          Buyers escalate from inside an order conversation. Claim a case to join that same conversation with its full
-          history, then propose a resolution the buyer confirms.
+          Buyers escalate from inside an order conversation. Gemini reads every open case, ranks it by urgency and
+          suggests a resolution. Claim a case to join the conversation, then propose the resolution the buyer confirms.
         </p>
       </header>
       <MetricGrid>
@@ -130,6 +165,11 @@ export function CoordinatorDesk() {
                             {item.volunteer ? `with ${item.volunteer.name} · ` : ""}
                             {item.status === "completed" ? formatDeskWhen(item.updatedAt) : `waiting ${formatWaiting(item.createdAt)}`}
                           </span>
+                          {triage[item.id] && item.status !== "completed" ? (
+                            <span className={`queue-ai is-${triage[item.id].urgency}`}>
+                              <span aria-hidden="true">✦</span> {triage[item.id].summary}
+                            </span>
+                          ) : null}
                         </span>
                         <Badge tone={requestTone(item.status)}>{statusLabel(item.status)}</Badge>
                       </button>
@@ -154,6 +194,9 @@ export function CoordinatorDesk() {
                   </p>
                   <h2>{selected.member.name}</h2>
                   {selected.note ? <p lang={selected.member.language ?? undefined}>“{selected.note}”</p> : null}
+                  {selected.status !== "completed" ? (
+                    <TriageCard triage={triage[selected.id] ?? null} pending={triaging} error={triageError} />
+                  ) : null}
                   <StatusTrail status={selected.status} />
                   {selected.volunteer ? <p className="meta">Seller: {selected.volunteer.name}</p> : null}
                   {selected.coordinator ? <p className="meta">Agent: {selected.coordinator.name}</p> : null}

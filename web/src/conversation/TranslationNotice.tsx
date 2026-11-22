@@ -15,7 +15,7 @@ export function TranslationNotice({
       <div className="translation-notice-copy">
         <p className="translation-notice-title">Translation unavailable</p>
         <p className="translation-notice-detail meta">
-          Enable Translation in Nexconn Console to translate this message.
+          Translation is not enabled for this app yet, so this message is shown as written.
         </p>
       </div>
       <Button variant="secondary" pending={retrying || pending} disabled={retrying || pending} onClick={onRetry}>

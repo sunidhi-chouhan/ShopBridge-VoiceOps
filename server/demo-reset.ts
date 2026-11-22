@@ -95,7 +95,7 @@ export async function performDemoReset(meta: store.DemoResetMeta): Promise<{ epo
         throw new HttpError(
           502,
           "NEXCONN_ERROR",
-          `Could not prepare the demo conversations in Nexconn. Nothing was changed. ${detail}`,
+          `Could not prepare the demo conversations. Nothing was changed. ${detail}`,
         );
       }
     }

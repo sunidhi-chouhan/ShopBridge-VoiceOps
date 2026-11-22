@@ -75,3 +75,13 @@ export function isAffirmative(utterance: string): boolean {
 export function normalizeText(value: unknown, max: number): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
 }
+
+/** A seller's special price: only before dispatch, lower than the original, at most 50% off, one open offer at a time. */
+export function offerEligibility(status: string, base: number, amount: number, openState: string | null): Verdict {
+  if (status !== "placed" && status !== "packed") return { ok: false, code: "OFFER_AFTER_DISPATCH", message: "Offers can only be made before the order ships." };
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, code: "BAD_AMOUNT", message: "Ask for the offer amount in rupees." };
+  if (amount >= base) return { ok: false, code: "OFFER_NOT_LOWER", message: `An offer must be lower than the current price of INR ${Math.round(base)}.` };
+  if (amount < base * 0.5) return { ok: false, code: "OFFER_TOO_DEEP", message: "That is more than 50% off; a human should approve discounts that deep. Suggest request_human_review." };
+  if (openState === "open") return { ok: false, code: "OFFER_ALREADY_OPEN", message: "This order already has an open offer waiting for the customer." };
+  return { ok: true };
+}

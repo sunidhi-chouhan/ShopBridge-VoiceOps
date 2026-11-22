@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { MESSAGE_TYPES, type HelpRequestView, type Language, type OrderView, type PublicUser } from "../../../shared/types";
-import { respondToOffer } from "../api";
+import { respondToOffer, suggestReplies } from "../api";
 import { useSession } from "../app/session";
 import { currentLinkState, subscribeLink, type LinkState } from "../chat/nexconn";
 import { LANGUAGE_OPTIONS, languageLabel } from "../chat/languagePrefs";
@@ -186,6 +186,32 @@ export function Chat({
   }, [channelId]);
 
   useEffect(() => onMessages?.(messages), [messages, onMessages]);
+
+  // Gemini smart replies: when the other person writes, suggest three next messages for the seller or agent.
+  const [aiQuick, setAiQuick] = useState<{ key: string; items: string[] } | null>(null);
+  const lastIncoming = [...messages].reverse().find((m) => m.kind === "text" && !m.mine && !m.recalled);
+  const lastIncomingKey = lastIncoming ? `${lastIncoming.id}:${language}` : "";
+  useEffect(() => {
+    if (party === "buyer" || !lastIncomingKey) return;
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      const transcript = messages
+        .filter((m) => (m.kind === "text" || m.kind === "sys") && !m.recalled)
+        .slice(-20)
+        .map((m) => ({
+          role: m.kind === "sys" ? "event" : m.senderId === order.buyer.id ? "buyer" : m.senderId === order.seller.id ? "seller" : "support",
+          text: m.text.slice(0, 600),
+        }));
+      suggestReplies(order.id, transcript, language)
+        .then((result) => alive && result.replies.length && setAiQuick({ key: lastIncomingKey, items: result.replies }))
+        .catch(() => undefined);
+    }, 700);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastIncomingKey, party, order.id]);
   useEffect(() => subscribeTranslationCache(() => setTick((v) => v + 1)), []);
 
   // Save the draft to the channel (Nexconn drafts) when leaving the conversation.
@@ -827,7 +853,8 @@ export function Chat({
   const menuMsg = pop?.type === "menu" ? findMsg(pop.id) : null;
   const reactMsg = pop?.type === "react" ? findMsg(pop.id) : null;
   const ctx = replyTo ?? editing;
-  const quick = suggestions(party, order, support, language);
+  const aiReady = aiQuick !== null && aiQuick.key === lastIncomingKey;
+  const quick = aiReady ? aiQuick.items : suggestions(party, order, support, language);
   const sub = typing ? (typing.kind === "voice" ? "recording a voice message…" : "typing…") : null;
   const counterRole = party === "buyer" ? "Seller" : "Buyer";
   const supportOpen = support && support.status !== "completed";
@@ -1027,9 +1054,9 @@ export function Chat({
       >
         {!rec ? (
           <div className="ix-quick" aria-label="Suggested replies">
-            <span className="ai">
+            <span className="ai" title={aiReady ? "Written by Google Gemini from this conversation. Tap to edit before sending." : undefined}>
               <Icon name="spark" />
-              Suggested
+              {aiReady ? "Gemini" : "Suggested"}
             </span>
             {quick.map((text) => (
               <button key={text} type="button" onClick={() => (setDraft(text), textRef.current?.focus())}>
@@ -1164,7 +1191,7 @@ export function Chat({
             </select>
           </label>
           <label className="ix-switch" htmlFor="ix-auto">
-            Auto-translate (Nexconn)
+            Auto-translate
             <input id="ix-auto" type="checkbox" checked={autoTranslate} onChange={(e) => setAutoTranslate(e.target.checked)} />
           </label>
           <p className="ix-small" style={{ margin: 0 }}>

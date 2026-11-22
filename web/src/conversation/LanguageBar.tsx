@@ -50,7 +50,7 @@ export function LanguageBar({
       ) : null}
       {!compact ? (
         <p className="meta language-bar-hint">
-          Messages from others are translated into {languageLabel(language)} by Nexconn. The original stays one tap away.
+          Messages from others are translated into {languageLabel(language)} automatically. The original stays one tap away.
         </p>
       ) : null}
     </div>

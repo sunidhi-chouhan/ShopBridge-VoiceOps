@@ -166,7 +166,7 @@ export function CallScreen({ call, peer, link, now, actions, preview }: Props) {
         <h2>{f.title}</h2>
         <p>{f.detail}</p>
         <small className="code">
-          {/^\d+$/.test(f.code) ? `Nexconn code ${f.code}` : f.code === "ENGINE" || f.code === "THROW" ? "Call SDK" : `Browser: ${f.code}`}
+          {/^\d+$/.test(f.code) ? `Code ${f.code}` : f.code === "ENGINE" || f.code === "THROW" ? "Call SDK" : `Browser: ${f.code}`}
         </small>
         <div className="row">
           {f.offerDemo && actions.demoInstead ? (
@@ -241,7 +241,7 @@ export function CallScreen({ call, peer, link, now, actions, preview }: Props) {
           <span className="brand">
             ShopBridge call
             {call.demo ? (
-              <span className="ix-call-demo" title="Simulated on this device. Nothing is sent to Nexconn and no call is recorded.">
+              <span className="ix-call-demo" title="Simulated on this device. Nothing is sent and no call is recorded.">
                 Demo call · simulated
               </span>
             ) : null}

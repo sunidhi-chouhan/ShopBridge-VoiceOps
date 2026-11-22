@@ -7,11 +7,13 @@ export function VoiceDock() {
   const { agent } = useVoice();
   const [route] = useRoute();
   if (route.section === "voice") return null;
+  // In a live room the chat composer sits bottom-right, so lift the dock above it.
+  const lift = route.section === "live" && Boolean(route.liveId) ? " is-raised" : "";
 
   const idle = agent.status === "idle" || agent.status === "error";
   if (idle) {
     return (
-      <div className="vo-dock is-idle">
+      <div className={`vo-dock is-idle${lift}`}>
         <button className="vo-fab" onClick={() => void agent.start()} aria-label="Talk to ShopBridge">
           <span aria-hidden="true">🎙</span> Talk to ShopBridge
         </button>
@@ -23,7 +25,7 @@ export function VoiceDock() {
   const lastAgent = [...agent.turns].reverse().find((t) => t.role === "agent");
   const last = agent.latencies.at(-1);
   return (
-    <div className="vo-dock" role="region" aria-label="Voice agent">
+    <div className={`vo-dock${lift}`} role="region" aria-label="Voice agent">
       <div className="vo-dock-head">
         <strong>{agent.status === "connecting" ? "Connecting…" : agent.micOn ? "Listening" : "Mic muted"}</strong>
         {last !== undefined ? <span className="vo-hint">{last} ms</span> : null}

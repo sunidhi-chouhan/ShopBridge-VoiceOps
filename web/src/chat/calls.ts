@@ -524,7 +524,7 @@ function sdkFailure(code: number): CallFailure {
   if (code === m.NCCallCode.VOIP_SERVICE_UNAVAILABLE) {
     return {
       title: "Calling isn't switched on yet",
-      detail: "Nexconn voice and video calling is not active for this app key, so the call was not placed. Chat keeps working.",
+      detail: "Voice and video calling is not active for this app key, so the call was not placed. Chat keeps working.",
       code: String(code),
       canRetry: false,
       offerVoice: false,
@@ -537,7 +537,7 @@ function sdkFailure(code: number): CallFailure {
   if (code === m.NCCallCode.CHAT_DISCONNECTED) {
     return { title: "Not connected", detail: "Chat is reconnecting. Try again in a moment.", code: String(code), canRetry: true, offerVoice: false };
   }
-  return { title: "The call could not start", detail: `Nexconn returned code ${code}.`, code: String(code), canRetry: true, offerVoice: false };
+  return { title: "The call could not start", detail: `The call service returned code ${code}.`, code: String(code), canRetry: true, offerVoice: false };
 }
 
 function busy(): boolean {
@@ -572,7 +572,7 @@ export async function placeCall(choice: { camera?: string; mic?: string; cam?: b
       phase: "failed",
       failure: {
         title: "Calling is unavailable",
-        detail: engineError ? `The Nexconn Call SDK did not start: ${engineError}` : "Chat has not finished connecting yet. Try again in a moment.",
+        detail: engineError ? `The call engine did not start: ${engineError}` : "Chat has not finished connecting yet. Try again in a moment.",
         code: "ENGINE",
         canRetry: true,
         offerVoice: false,

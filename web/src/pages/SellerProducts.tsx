@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { CATEGORIES, type Category, type ProductView } from "../../../shared/types";
 import { PRODUCT_IMAGES, categoryLabel, formatInr, imageAlt } from "../../../shared/catalog";
-import { createProduct, deleteProduct, listSellerProducts, patchProduct } from "../api";
+import { createProduct, deleteProduct, draftListing, listSellerProducts, patchProduct, type ListingDraft } from "../api";
 import { ActionMenu } from "../ui/ActionMenu";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
@@ -48,6 +48,32 @@ export function SellerProducts() {
   const [pending, setPending] = useState(false);
   const [removeId, setRemoveId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [aiNote, setAiNote] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiDraft, setAiDraft] = useState<ListingDraft | null>(null);
+
+  /** Gemini looks at the chosen cover photo (plus the seller's note) and fills the form for review. */
+  async function draftWithGemini() {
+    if (!draft.images[0]) return;
+    setAiBusy(true);
+    setFormError(null);
+    try {
+      const { draft: d } = await draftListing(draft.images[0], aiNote.trim());
+      setAiDraft(d);
+      setDraft((current) => ({
+        ...current,
+        name: d.name,
+        description: d.description,
+        category: d.category,
+        price: current.price || (d.priceSuggestion ? String(d.priceSuggestion) : current.price),
+      }));
+      toast("Gemini drafted the listing. Review every field before saving.");
+    } catch (caught: unknown) {
+      setFormError(caught instanceof Error ? caught.message : "Gemini could not draft this listing.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
 
   function load() {
     return listSellerProducts().then((result) => {
@@ -62,6 +88,8 @@ export function SellerProducts() {
 
   function open(product: ProductView | "new") {
     setFormError(null);
+    setAiNote("");
+    setAiDraft(null);
     if (product === "new") setDraft(blankDraft());
     else {
       setDraft({
@@ -147,28 +175,6 @@ export function SellerProducts() {
         />
         <p className="kicker">{editing === "new" ? "New piece" : "Edit piece"}</p>
         <h1 className="page-title">{editing === "new" ? "Add to the shelf." : draft.name || "Edit"}</h1>
-        <TextField id="pname" label="Name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required />
-        <TextArea id="pdesc" label="Description" value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} required rows={5} />
-        <SelectField id="pcat" label="Category" value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Category })}>
-          {CATEGORIES.map((item) => (
-            <option key={item} value={item}>
-              {categoryLabel(item)}
-            </option>
-          ))}
-        </SelectField>
-        <TextField id="pprice" label="Price (₹)" type="number" min={1} value={draft.price} onChange={(event) => setDraft({ ...draft, price: event.target.value })} required />
-        <div className="field">
-          <label id="pstock-label">Stock on the shelf</label>
-          <QtyStepper
-            label="Stock on the shelf"
-            value={draft.stock}
-            min={0}
-            max={9999}
-            editable
-            onChange={(next) => setDraft((current) => ({ ...current, stock: next }))}
-          />
-          <p className="hint">How many you have to sell. Shoppers can add up to this number. Default is 10 — raise it if they should be able to take more than one.</p>
-        </div>
         <fieldset className="image-picker">
           <legend>Cover photograph</legend>
           <p className="hint">Choose one. Shoppers see this on the floor, the product page, and in orders.</p>
@@ -192,6 +198,49 @@ export function SellerProducts() {
             })}
           </div>
         </fieldset>
+        <section className="ai-listing" aria-label="Draft with Gemini">
+          <p className="triage-k"><span aria-hidden="true">✦</span> Draft with Gemini</p>
+          <p className="hint">Pick the cover photo above, add a rough note if you like, and Gemini writes the name, description and category and suggests a price. You review and save.</p>
+          <TextField
+            id="pnote"
+            label="Rough note (optional)"
+            placeholder="e.g. kantha throw from old cotton saris, two layers, hand stitched"
+            value={aiNote}
+            maxLength={300}
+            onChange={(event) => setAiNote(event.target.value)}
+          />
+          <Button type="button" variant="secondary" pending={aiBusy} disabled={!draft.images[0]} onClick={() => void draftWithGemini()}>
+            {draft.images[0] ? "Draft with Gemini" : "Choose a cover photo first"}
+          </Button>
+          {aiDraft ? (
+            <p className="meta">
+              Drafted by Google Gemini ({aiDraft.model}).
+              {aiDraft.priceSuggestion ? ` Suggested price ${formatInr(aiDraft.priceSuggestion)}${aiDraft.priceReason ? `: ${aiDraft.priceReason.replace(/[.\s]+$/, "")}` : ""}. The price is your call.` : ""}
+            </p>
+          ) : null}
+        </section>
+        <TextField id="pname" label="Name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required />
+        <TextArea id="pdesc" label="Description" value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} required rows={5} />
+        <SelectField id="pcat" label="Category" value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Category })}>
+          {CATEGORIES.map((item) => (
+            <option key={item} value={item}>
+              {categoryLabel(item)}
+            </option>
+          ))}
+        </SelectField>
+        <TextField id="pprice" label="Price (₹)" type="number" min={1} value={draft.price} onChange={(event) => setDraft({ ...draft, price: event.target.value })} required />
+        <div className="field">
+          <label id="pstock-label">Stock on the shelf</label>
+          <QtyStepper
+            label="Stock on the shelf"
+            value={draft.stock}
+            min={0}
+            max={9999}
+            editable
+            onChange={(next) => setDraft((current) => ({ ...current, stock: next }))}
+          />
+          <p className="hint">How many you have to sell. Shoppers can add up to this number. Default is 10 — raise it if they should be able to take more than one.</p>
+        </div>
         {formError ? (
           <p className="field-error" role="alert">
             {formError}

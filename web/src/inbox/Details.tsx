@@ -427,7 +427,16 @@ export function Details({
 
         {party === "support" && open && open.coordinator?.id === user.id ? (
           <>
-            <CaseBrief order={order} support={open} lines={lines} />
+            <CaseBrief
+              order={order}
+              support={open}
+              lines={lines}
+              onUseSuggestion={(value, note) => {
+                setResolution(value);
+                setResolutionNote(note.slice(0, 240));
+                toast("Gemini's suggestion is in the proposal form. Review it, then press Propose.");
+              }}
+            />
             <form
               className="ix-form"
               onSubmit={(e) => {

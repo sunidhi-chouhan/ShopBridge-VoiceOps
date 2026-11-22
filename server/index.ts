@@ -22,6 +22,10 @@ import { MESSAGE_TYPES } from "../shared/types";
 import { currentDemoEpoch, demoResetEnabled, resetDemoForUser, startDemoEpochWatch } from "./demo-reset";
 import { clientKey } from "./auth";
 import { draftReply, parseTranscript } from "./assist";
+import { triageCase, type Triage } from "./triage";
+import { suggestReplies } from "./replies";
+import { draftListing } from "./listing";
+import { endLive, featureLive, featuredFor, getLive, listLive, recordLiveSale, startLive } from "./live";
 import { SESSION_MS, assertAuthRate, parseDemoParty, reseedAllowed } from "./auth";
 import {
   advanceOrder,
@@ -128,7 +132,8 @@ function sendError(res: ServerResponse, error: unknown): void {
     return;
   }
   if (error instanceof NexconnError) {
-    sendJson(res, 502, { error: { code: "NEXCONN_ERROR", message: error.message } });
+    console.warn(error.message);
+    sendJson(res, 502, { error: { code: "CHAT_SERVICE_ERROR", message: error.message.replace(/Nexconn/g, "Chat service") } });
     return;
   }
   sendJson(res, 500, { error: { code: "SERVER_ERROR", message: "Something went wrong. Try again." } });
@@ -234,9 +239,24 @@ async function announce(channelId: string | null, text: string): Promise<boolean
   }
 }
 
+/** VoiceOps notifier: plain order events, or the real offer card when the agent made an offer. */
+async function voiceNotify(channelId: string | null, text: string, extra?: { orderId: string; card?: "offer" }): Promise<boolean> {
+  if (extra?.card === "offer" && channelId && nexconnConfigured()) {
+    try {
+      const participants = await orderParticipants(extra.orderId);
+      await sendCustomMessage(participants.order.sellerId, channelId, MESSAGE_TYPES.offer, cardContent("offer", participants.order));
+      return true;
+    } catch (error) {
+      console.warn(`Could not post the offer card to ${channelId}: ${error instanceof Error ? error.message : error}`);
+      return false;
+    }
+  }
+  return announce(channelId, text);
+}
+
 async function openOrderNexconnRoom(orderId: string) {
   if (!nexconnConfigured()) {
-    throw new HttpError(503, "NEXCONN_NOT_CONFIGURED", "Add the Nexconn App Key and App Secret to .env, then try again.");
+    throw new HttpError(503, "NEXCONN_NOT_CONFIGURED", "Chat is not configured on this server yet (NEXCONN_APP_KEY / NEXCONN_APP_SECRET).");
   }
   const people = await orderParticipants(orderId);
   if (people.order.channelId) return saveOrderChannel(orderId, people.order.channelId);
@@ -308,7 +328,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
-  if (await handleVoiceOpsApi(req, res, url, { currentUser, readJson: (r) => readJson(r), sendJson, notifier: announce, openRoom: nexconnConfigured() ? (orderId) => openOrderNexconnRoom(orderId) : undefined })) return;
+  if (await handleVoiceOpsApi(req, res, url, { currentUser, readJson: (r) => readJson(r), sendJson, notifier: voiceNotify, openRoom: nexconnConfigured() ? (orderId) => openOrderNexconnRoom(orderId) : undefined })) return;
 
   if (req.method === "POST" && pathname === "/api/register") {
     assertAuthRate(req);
@@ -412,7 +432,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === "POST" && pathname === "/api/chat/token") {
     const user = await currentUser(req);
     if (!nexconnConfigured()) {
-      throw new HttpError(503, "NEXCONN_NOT_CONFIGURED", "Add the Nexconn App Key and App Secret to .env, then reload.");
+      throw new HttpError(503, "NEXCONN_NOT_CONFIGURED", "Chat is not configured on this server yet (NEXCONN_APP_KEY / NEXCONN_APP_SECRET).");
     }
     const token = await issueAccessToken(user.id, user.name);
     sendJson(res, 200, { appKey: nexconnAppKey(), token, userId: user.id });
@@ -586,6 +606,20 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  // Gemini smart replies for the order chat (suggestions only; the person sends).
+  const repliesMatch = pathname.match(/^\/api\/orders\/([a-z0-9]+)\/replies$/);
+  if (req.method === "POST" && repliesMatch) {
+    const user = await currentUser(req);
+    assertAuthRate(req, "replies");
+    const order = await getOrder(user, parseId(repliesMatch[1]));
+    const party = user.role === "volunteer" ? "seller" : user.role === "coordinator" ? "support" : "buyer";
+    const body = requireObject(await readJson(req, 64_000));
+    const transcript = body.transcript === undefined ? [] : parseTranscript(body.transcript);
+    const language = body.language === undefined ? user.language ?? "en" : parseLanguage(body.language);
+    sendJson(res, 200, await suggestReplies({ order, party, transcript, language }));
+    return;
+  }
+
   const offerMatch = pathname.match(/^\/api\/orders\/([a-z0-9]+)\/offers$/);
   if (req.method === "POST" && offerMatch) {
     const user = await currentUser(req);
@@ -636,6 +670,46 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  // Gemini triage for the whole open queue (cached; only new or changed cases call the model).
+  if (req.method === "POST" && pathname === "/api/requests/triage") {
+    const user = await currentUser(req);
+    if (user.role !== "coordinator") throw new HttpError(403, "FORBIDDEN", "Only a support agent can triage cases.");
+    assertAuthRate(req, "assist");
+    const open = (await listRequests(user)).filter((item) => item.orderId && item.status !== "completed").slice(0, 12);
+    const triage: Record<string, Triage> = {};
+    const failed: string[] = [];
+    let next = 0;
+    const worker = async () => {
+      while (next < open.length) {
+        const support = open[next++];
+        try {
+          const parts = await orderParticipants(support.orderId!);
+          triage[support.id] = await triageCase({ ...parts, support });
+        } catch {
+          failed.push(support.id);
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    sendJson(res, 200, { triage, failed });
+    return;
+  }
+
+  // Gemini triage for one case, using the live conversation the agent can see.
+  const triageMatch = pathname.match(/^\/api\/requests\/([a-z0-9]+)\/triage$/);
+  if (req.method === "POST" && triageMatch) {
+    const user = await currentUser(req);
+    if (user.role !== "coordinator") throw new HttpError(403, "FORBIDDEN", "Only a support agent can triage cases.");
+    assertAuthRate(req, "assist");
+    const support = (await listRequests(user)).find((item) => item.id === parseId(triageMatch[1]));
+    if (!support || !support.orderId) throw new HttpError(404, "NOT_FOUND", "That support case does not exist.");
+    const body = requireObject(await readJson(req, 64_000));
+    const transcript = body.transcript === undefined ? [] : parseTranscript(body.transcript);
+    const parts = await orderParticipants(support.orderId);
+    sendJson(res, 200, { triage: await triageCase({ ...parts, support, transcript }) });
+    return;
+  }
+
   const assistMatch = pathname.match(/^\/api\/requests\/([a-z0-9]+)\/assist$/);
   if (req.method === "POST" && assistMatch) {
     const user = await currentUser(req);
@@ -669,6 +743,76 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
         : "Update · The buyer declined the proposal. Support will follow up.",
     );
     sendJson(res, 200, { request });
+    return;
+  }
+
+  // ---- Live sale rooms (Nexconn open channels) ----
+  if (req.method === "GET" && pathname === "/api/live") {
+    await currentUser(req);
+    sendJson(res, 200, { sessions: await listLive() });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/live") {
+    const user = await currentUser(req);
+    if (user.role !== "volunteer") throw new HttpError(403, "FORBIDDEN", "Only a seller can go live.");
+    const body = requireObject(await readJson(req));
+    const title = parseShortText(body.title, "live session title");
+    const product =
+      typeof body.productId === "string" && body.productId ? await getProduct(parseId(body.productId), user) : null;
+    sendJson(res, 201, { session: await startLive(user, title, product) });
+    return;
+  }
+
+  const liveMatch = pathname.match(/^\/api\/live\/([a-f0-9]{16})(?:\/(feature|end|buy))?$/);
+  if (liveMatch) {
+    const [, liveId, action] = liveMatch;
+    const user = await currentUser(req);
+    if (req.method === "GET" && !action) {
+      sendJson(res, 200, { session: await getLive(liveId) });
+      return;
+    }
+    if (req.method === "POST" && action === "feature") {
+      const body = requireObject(await readJson(req));
+      const productId = parseId(typeof body.productId === "string" ? body.productId : "");
+      sendJson(res, 200, { session: await featureLive(user, liveId, await getProduct(productId, user)) });
+      return;
+    }
+    if (req.method === "POST" && action === "end") {
+      await endLive(user, liveId);
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "POST" && action === "buy") {
+      if (user.role !== "member") throw new HttpError(403, "FORBIDDEN", "Only a buyer can buy.");
+      const body = requireObject(await readJson(req));
+      const productId = parseId(typeof body.productId === "string" ? body.productId : "");
+      const session = featuredFor(liveId, productId);
+      const [order] = await checkout(user, { productId, quantity: 1 });
+      let linked = order;
+      if (nexconnConfigured()) {
+        try {
+          linked = await openOrderNexconnRoom(order.id);
+          await announce(linked.channelId, `Update · Bought live during “${session.title}”.`);
+        } catch {
+          /* the order stands; its conversation can be opened later from Orders */
+        }
+      }
+      const live = await recordLiveSale(liveId, user.name, await getProduct(productId, user));
+      sendJson(res, 201, { order: linked, session: live });
+      return;
+    }
+    throw new HttpError(405, "METHOD_NOT_ALLOWED", "That action is not supported.");
+  }
+
+  // Gemini listing draft from the chosen cover photo (the seller reviews and saves).
+  if (req.method === "POST" && pathname === "/api/seller/products/draft") {
+    const user = await currentUser(req);
+    if (user.role !== "volunteer") throw new HttpError(403, "FORBIDDEN", "Only sellers can draft listings.");
+    assertAuthRate(req, "assist");
+    const body = requireObject(await readJson(req));
+    const note = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
+    sendJson(res, 200, { draft: await draftListing({ image: String(body.image ?? ""), note }) });
     return;
   }
 
@@ -826,7 +970,7 @@ attachLiveRelay(server, {
     const token = sessionTokenFrom(req);
     return token ? userBySession(token) : null;
   },
-  notifier: announce,
+  notifier: voiceNotify,
 });
 
 /** Schema check at boot: additive migrations can run automatically when explicitly enabled. */

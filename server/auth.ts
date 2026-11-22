@@ -15,6 +15,8 @@ export const RATE_LIMITS = {
   demo: 200,
   reset: 6,
   assist: 30,
+  /** Gemini smart replies fire on incoming chat messages, so they get a larger budget. */
+  replies: 120,
 } as const;
 export type RateBucket = keyof typeof RATE_LIMITS;
 

@@ -206,6 +206,11 @@ export function AiStory({ variant, onTry, measured }: { variant: "landing" | "ap
             <li>Chooses the next step and calls the shop's tools</li>
             <li>Explains blocks and suggests the alternative</li>
             <li>Drafts customer messages in the customer's language</li>
+            <li>Briefs the seller on what needs attention when a session opens</li>
+            <li>Sends one delay update to every late customer with a single yes</li>
+            <li>Offers special prices, within a discount limit</li>
+            <li>Triages support cases: summary, urgency, buyer mood, suggested resolution</li>
+            <li>Suggests chat replies and drafts product listings from a photo</li>
             <li>Turns the day's work into a summary for the owner, team or customers</li>
           </ul>
         </div>
@@ -215,7 +220,7 @@ export function AiStory({ variant, onTry, measured }: { variant: "landing" | "ap
             <li>Write to the database itself</li>
             <li>Act without the seller's yes</li>
             <li>Guess an unclear order number or amount: it asks again</li>
-            <li>Issue refunds: a person handles money</li>
+            <li>Issue refunds or deep discounts: a person handles money</li>
             <li>See the API key: it stays on the server</li>
           </ul>
         </div>

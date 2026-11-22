@@ -57,7 +57,7 @@ function fixture(params: URLSearchParams): CallState {
           ? { title: "Microphone access is blocked", detail: "Allow the microphone for this site (the icon next to the address bar), then try again.", code: "NotAllowedError", canRetry: true, offerVoice: false }
           : params.get("why") === "cam"
             ? { title: "No camera found", detail: "Connect a camera, or make a voice call instead.", code: "NotFoundError", canRetry: true, offerVoice: true }
-            : { title: "Calling isn't switched on yet", detail: "Nexconn voice and video calling is not active for this app key, so the call was not placed. Chat keeps working.", code: "80006", canRetry: false, offerVoice: false }
+            : { title: "Calling isn't switched on yet", detail: "Voice and video calling is not active for this app key, so the call was not placed. Chat keeps working.", code: "80006", canRetry: false, offerVoice: false }
         : null,
     notice: params.get("notice"),
   };

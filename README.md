@@ -20,6 +20,7 @@ Built on the **Nexconn Chat SDK** (`@nexconn/chat` 26.2.1) and **Call SDK** (`@n
 | Read receipts, unread | `needReceipt`, `sendReadReceiptResponse`, `getMessageReadReceiptInfo`, `clearUnreadCount` |
 | Drafts, pin, mute | `saveDraft`, `pin`/`unpin`, `setNoDisturbLevel` |
 | Order events, offers, tracking, order & call cards, typing | `registerCustomMessages` (`SB:*`), server-sent where trust matters |
+| **Live sale rooms** ("Live from the loom"): seller puts a piece on stage, viewers chat in their own language, send hearts and buy in one tap | **Open channels**: Server API `open-channel/create`, `get` (live viewer count), `metadata/batch/set` (featured product, sold count), `message/send`, `destroy`; client `OpenChannel.enterChannel` / `exitChannel`, `getMetadata`, `createOpenChannelMessagesQuery`, `OpenChannelHandler` (participants, metadata, destroyed) |
 | Voice & video calls | `NCCallEngine` `startCall` / `acceptCall` / `endCall`, `setLocal/RemoteVideoView`, media switch |
 | Connection state | `addConnectionStatusHandler` |
 
@@ -93,6 +94,11 @@ See `RENDER.md`. `render.yaml` creates the Render web service and Postgres datab
 ---
 
 ## VoiceOps: voice-driven agentic workflows (Gemini Live)
+
+Gemini automation across the app (details in `docs/voiceops/SUBMISSION.md`): the seller voice agent (orders, returns, stock,
+messages, special-price offers, one-approval delay notices to every late customer, proactive briefing), Gemini triage of the
+support queue with a policy-checked suggested resolution, smart replies in seller and support chat, listings drafted from the
+cover photo, support reply drafts and the multilingual daily digest.
 
 A seller talks to ShopBridge in Hindi, Hinglish or English. The agent looks up real orders, proposes changes, reads them back,
 waits for a spoken or tapped approval, executes through a validated backend and confirms by voice.

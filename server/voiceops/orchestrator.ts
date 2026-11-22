@@ -14,7 +14,8 @@ import { HttpError } from "../errors";
 import type { UserRecord } from "../store-types";
 import * as policy from "./policy";
 
-export type Notifier = (channelId: string | null, text: string) => Promise<boolean>;
+/** Posts an order-chat event. `extra.card` asks for a rich card (for example the offer card) instead of plain text. */
+export type Notifier = (channelId: string | null, text: string, extra?: { orderId: string; card?: "offer" }) => Promise<boolean>;
 export type Ctx = { user: UserRecord; sessionId: string; notifier: Notifier };
 
 export type ToolResult = {
@@ -168,7 +169,7 @@ type Executed = {
   data: unknown;
   message: string;
   undo?: Record<string, unknown>;
-  notify?: Array<{ orderId: string; channelId: string | null; text: string; language?: string | null }>;
+  notify?: Array<{ orderId: string; channelId: string | null; text: string; language?: string | null; card?: "offer" }>;
 };
 
 type WriteTool = {
@@ -322,6 +323,80 @@ writeTools.adjust_stock = {
   },
 };
 
+const inr = (n: number) => `INR ${Math.round(n).toLocaleString("en-IN")}`;
+
+writeTools.make_offer = {
+  async prepare(client, ctx, args) {
+    const order = await loadOrder(client, ctx.user.id, args.order_no);
+    const extra = (await client.query("SELECT original_total, offer_state FROM orders WHERE id = $1", [order.id])).rows[0] ?? {};
+    const verdict = policy.offerEligibility(order.status, Number(extra.original_total ?? order.total), Number(args.amount), extra.offer_state ?? null);
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const base = Number(extra.original_total ?? order.total);
+    const amount = Math.round(Number(args.amount));
+    const note = policy.normalizeText(args.note, 200);
+    return {
+      args: { order_no: order.order_no, amount, ...(note ? { note } : {}) },
+      readback: `Offer ${order.buyer_name} a special price of ${inr(amount)} on order ${order.order_no} (was ${inr(base)})${note ? `, with the note "${note}"` : ""}. They can accept or decline it in the order chat.`,
+    };
+  },
+  async execute(client, ctx, args) {
+    const order = await loadOrder(client, ctx.user.id, args.order_no, true);
+    const extra = (await client.query("SELECT original_total, offer_state FROM orders WHERE id = $1", [order.id])).rows[0] ?? {};
+    const base = Number(extra.original_total ?? order.total);
+    const verdict = policy.offerEligibility(order.status, base, Number(args.amount), extra.offer_state ?? null);
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const offerId = id("f");
+    await client.query(
+      `UPDATE orders SET offer_id = $2, offer_amount = $3, offer_note = $4, offer_state = 'open',
+              original_total = COALESCE(original_total, total), updated_at = now() WHERE id = $1`,
+      [order.id, offerId, Number(args.amount), (args.note as string) ?? null],
+    );
+    return {
+      data: { order_no: order.order_no, amount: Number(args.amount), was: base },
+      message: `Offer of ${inr(Number(args.amount))} sent to ${order.buyer_name} for order ${order.order_no}.`,
+      undo: { kind: "offer", order_id: order.id, offer_id: offerId },
+      notify: [{ orderId: order.id, channelId: order.channel_id, text: `Offer · Special price ${inr(Number(args.amount))} (was ${inr(base)}).`, card: "offer" }],
+    };
+  },
+};
+
+const MAX_BATCH = 20;
+const firstName = (name: string) => name.split(/\s+/)[0] || name;
+
+/** One approval, many customers: a delay update to every delayed order (or the listed ones). */
+writeTools.notify_delayed_customers = {
+  async prepare(client, ctx, args) {
+    await ensureOrderNumbers(client, ctx.user.id);
+    const all = (await client.query(`${ORDER_SELECT} WHERE o.seller_id = $1 ORDER BY n.order_no`, [ctx.user.id])).rows.map(normRow);
+    const wanted = Array.isArray(args.order_nos) && args.order_nos.length ? new Set(args.order_nos.map(Number)) : null;
+    const targets = all.filter((o) => policy.isDelayed(o.status, o.created_at) && (!wanted || wanted.has(o.order_no))).slice(0, MAX_BATCH);
+    if (!targets.length) throw new ToolError("NO_DELAYED_ORDERS", "There are no delayed orders to notify right now.");
+    const message = policy.normalizeText(args.message, 400);
+    if (message.length < 10) throw new ToolError("EMPTY_MESSAGE", "Draft the delay message first (one or two polite sentences, no promises you cannot keep).");
+    return {
+      args: { order_nos: targets.map((o) => o.order_no), message, language: policy.normalizeText(args.language, 20) || null },
+      readback: `Send ${targets.length} delayed customer${targets.length > 1 ? "s" : ""} (orders ${targets.map((o) => `${o.order_no} ${firstName(o.buyer_name)}`).join(", ")}) this update: "Hi <name>, ${message}"`,
+    };
+  },
+  async execute(client, ctx, args) {
+    await ensureOrderNumbers(client, ctx.user.id);
+    const nos = (args.order_nos as number[]).map(Number);
+    const rows = (await client.query(`${ORDER_SELECT} WHERE o.seller_id = $1 AND n.order_no = ANY($2)`, [ctx.user.id, nos])).rows.map(normRow);
+    const live = rows.filter((o) => o.status !== "cancelled" && o.status !== "delivered");
+    if (!live.length) throw new ToolError("STATE_CHANGED", "Those orders have changed since; nothing was sent.");
+    return {
+      data: { notified: live.map((o) => o.order_no), skipped: nos.filter((n) => !live.some((o) => o.order_no === n)) },
+      message: `Delay update sent to ${live.length} customer${live.length > 1 ? "s" : ""}: orders ${live.map((o) => o.order_no).join(", ")}.`,
+      notify: live.map((o) => ({
+        orderId: o.id,
+        channelId: o.channel_id,
+        text: `Message from ${ctx.user.name}: Hi ${firstName(o.buyer_name)}, ${String(args.message)}`,
+        language: (args.language as string) ?? null,
+      })),
+    };
+  },
+};
+
 writeTools.request_human_review = {
   async prepare(_client, _ctx, args) {
     const reason = policy.normalizeText(args.reason, 300);
@@ -399,6 +474,8 @@ export const toolDeclarations = [
   { name: "create_return", description: "Start a return for a delivered order inside the 7-day window. Never refunds money.", parameters: { type: "object", properties: { order_no: orderNo, reason: { type: "string" } }, required: ["order_no"] } },
   { name: "send_customer_message", description: "Send a short message to the customer in their order conversation. Draft the text yourself in the customer's language.", parameters: { type: "object", properties: { order_no: orderNo, message: { type: "string" }, language: { type: "string" } }, required: ["order_no", "message"] } },
   { name: "adjust_stock", description: "Change a product's stock by delta, or set it to an exact number.", parameters: { type: "object", properties: { product_name: { type: "string" }, delta: { type: "integer" }, set_to: { type: "integer" } }, required: ["product_name"] } },
+  { name: "make_offer", description: "Offer the customer a special (lower) price on an order that has not shipped. Needs approval. The buyer accepts or declines in the order chat.", parameters: { type: "object", properties: { order_no: orderNo, amount: { type: "integer", description: "New total in rupees, lower than the current price." }, note: { type: "string" } }, required: ["order_no", "amount"] } },
+  { name: "notify_delayed_customers", description: "Send ONE delay update to every delayed customer (or to the given order numbers) with a single approval. Draft a short, polite message without names; each customer's first name is added automatically.", parameters: { type: "object", properties: { message: { type: "string" }, order_nos: { type: "array", items: { type: "integer" } }, language: { type: "string" } }, required: ["message"] } },
   { name: "request_human_review", description: "Escalate when the request is unclear, out of policy or risky.", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
   { name: "confirm_action", description: "Call ONLY after the seller clearly said yes to the exact read-back. Pass their words in user_words.", parameters: { type: "object", properties: { approval_id: { type: "string" }, user_words: { type: "string" } }, required: ["approval_id", "user_words"] } },
   { name: "reject_action", description: "Call when the seller says no or changes their mind about a pending approval.", parameters: { type: "object", properties: { approval_id: { type: "string" } }, required: ["approval_id"] } },
@@ -558,7 +635,7 @@ export async function decideApproval(
       [row.action_id, JSON.stringify({ data: executed.data, undo: executed.undo ?? null }), Date.now() - started],
     );
     for (const n of executed.notify ?? []) {
-      const sent = await ctx.notifier(n.channelId, n.text).catch(() => false);
+      const sent = await ctx.notifier(n.channelId, n.text, { orderId: n.orderId, card: n.card }).catch(() => false);
       await getPool().query("UPDATE voiceops_notifications SET delivery = $2 WHERE action_id = $1 AND order_id = $3 AND body = $4", [row.action_id, sent ? "sent" : "recorded", n.orderId, n.text]);
     }
     const ms = Date.now() - started;
@@ -611,6 +688,14 @@ export async function undoAction(ctx: Ctx, actionId: string | null): Promise<Too
           if (!r.rowCount) throw new ToolError("STATE_CHANGED", "The return has changed since.");
           return "The return request is cancelled.";
         }
+        case "offer": {
+          const r = await client.query(
+            "UPDATE orders SET offer_id = NULL, offer_amount = NULL, offer_note = NULL, offer_state = NULL, total = COALESCE(original_total, total), updated_at = now() WHERE id = $1 AND seller_id = $2 AND offer_id = $3 AND offer_state = 'open'",
+            [undo.order_id, ctx.user.id, undo.offer_id],
+          );
+          if (!r.rowCount) throw new ToolError("STATE_CHANGED", "The buyer has already answered that offer, so it cannot be withdrawn.");
+          return "The offer is withdrawn.";
+        }
         case "stock": {
           const r = await client.query("UPDATE products SET stock = stock - $2 WHERE id = $1 AND seller_id = $3 AND stock - $2 >= 0", [undo.product_id, undo.delta, ctx.user.id]);
           if (!r.rowCount) throw new ToolError("STOCK_CHANGED", "Stock has changed since, so it cannot be reversed safely.");
@@ -662,6 +747,9 @@ export async function overview(user: UserRecord) {
  */
 export const ASSUMED_MANUAL_SECONDS: Record<string, number> = {
   update_order_status: 90, cancel_order: 120, create_return: 240, send_customer_message: 150, adjust_stock: 90,
+  make_offer: 120,
+  /** One batch of delay updates; the manual way is one chat per delayed customer (about three in a typical day). */
+  notify_delayed_customers: 450,
 };
 export const BASELINE_TASKS = Object.keys(ASSUMED_MANUAL_SECONDS);
 const isMissingTable = (error: unknown) => (error as { code?: string })?.code === "42P01";

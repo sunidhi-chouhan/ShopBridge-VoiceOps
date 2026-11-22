@@ -49,7 +49,7 @@ export function ResetDemoDialog({
       </p>
       <p className="meta reset-scope">
         This is a shared demo: everyone using it right now will see the restored data. Fresh order conversations are
-        created in Nexconn. Accounts that are not demo accounts are kept.
+        created. Accounts that are not demo accounts are kept.
       </p>
       {phase === "running" ? (
         <p className="note" role="status">

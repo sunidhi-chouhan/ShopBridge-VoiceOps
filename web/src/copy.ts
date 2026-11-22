@@ -2,7 +2,7 @@ import type { RequestStatus } from "../../shared/types";
 
 export const copy = {
   name: "ShopBridge",
-  tagline: "Voice AI that runs your shop.",
+  tagline: "Voice AI that runs your shop · powered by Gemini",
   place: "Gemini Live voice agent · for Indian sellers",
   signInTitle: "Sign in",
   nameLabel: "Your name",
@@ -19,7 +19,7 @@ export const copy = {
   demoSupport: "Support agent",
   signOut: "Sign out",
   orderSupportToast: "Support requested. An agent will join this order conversation.",
-  keysMissing: "Saved. Chat needs the Nexconn App Key and App Secret on the server.",
+  keysMissing: "Saved. Chat needs its service keys on the server.",
   noCases: "No support cases yet.",
   retry: "Try again",
 };

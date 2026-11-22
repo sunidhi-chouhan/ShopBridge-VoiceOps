@@ -42,7 +42,7 @@ export async function runPreflight(): Promise<{ ok: boolean; checks: PreflightCh
     checks.push({ name: slot === 0 ? "Gemini primary key" : "Gemini backup key", ok: r.ok, detail: r.detail });
   }
   if (slots.length === 1) checks.push({ name: "Gemini backup key", ok: false, detail: "not configured (GEMINI_API_KEY_BACKUP); a quota or key failure would end voice" });
-  checks.push({ name: "Nexconn chat", ok: nexconnConfigured(), detail: nexconnConfigured() ? "configured" : "not configured; customer messages are recorded but not delivered" });
-  const required = checks.filter((c) => c.name !== "Gemini backup key" && c.name !== "Nexconn chat");
+  checks.push({ name: "Chat service", ok: nexconnConfigured(), detail: nexconnConfigured() ? "configured" : "not configured; customer messages are recorded but not delivered" });
+  const required = checks.filter((c) => c.name !== "Gemini backup key" && c.name !== "Chat service");
   return { ok: required.every((c) => c.ok), checks };
 }

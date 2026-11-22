@@ -83,26 +83,97 @@ export function buildPrompt(input: {
   return `ORDER RECORD\n${record}\n\nCONVERSATION (quoted, oldest first)\n<<<\n${conversation || "(no messages)"}\n>>>\n\nReply language: ${LANGUAGE_NAMES[language]}.\nDraft the agent's next message to the buyer and seller.`;
 }
 
-let cachedModel: string | null = null;
+const LISTING_TTL_MS = 10 * 60_000;
+const listings = new Map<string, { at: number; models: string[] }>();
 
-/** Prefer an explicitly configured model; otherwise pick the newest available Flash model. */
-export async function resolveModel(key: string): Promise<string> {
-  const configured = process.env.GEMINI_MODEL?.trim();
-  if (configured) return configured;
-  if (cachedModel) return cachedModel;
+/** Newest usable Flash text models for this key, newest first (cached for a few minutes). */
+async function listFlashModels(key: string): Promise<string[]> {
+  const hit = listings.get(key);
+  if (hit && Date.now() - hit.at < LISTING_TTL_MS) return hit.models;
   const response = await fetchWithTimeout(`${API_BASE}/models?pageSize=200`, { headers: { "x-goog-api-key": key } });
   if (!response.ok) throw new HttpError(502, "AI_UNAVAILABLE", "The AI service rejected the request. Check GEMINI_API_KEY.");
   const json = (await response.json()) as {
     models?: Array<{ name: string; supportedGenerationMethods?: string[] }>;
   };
-  const candidates = (json.models ?? [])
+  const version = (name: string) => Number(name.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0);
+  const models = (json.models ?? [])
     .filter((model) => model.supportedGenerationMethods?.includes("generateContent"))
     .map((model) => model.name.replace(/^models\//, ""))
-    .filter((name) => /flash/i.test(name) && !/(image|audio|tts|live|vision|exp|preview|thinking|lite)/i.test(name));
-  const version = (name: string) => Number(name.match(/gemini-(\d+(?:\.\d+)?)/)?.[1] ?? 0);
-  candidates.sort((a, b) => version(b) - version(a) || a.length - b.length);
-  cachedModel = candidates[0] ?? "gemini-2.5-flash";
-  return cachedModel;
+    .filter((name) => /flash/i.test(name) && !/(image|audio|tts|live|vision|exp|preview|thinking|lite)/i.test(name))
+    .sort((a, b) => version(b) - version(a) || a.length - b.length);
+  listings.set(key, { at: Date.now(), models });
+  return models;
+}
+
+/** Prefer an explicitly configured model; otherwise the newest available Flash model. */
+export async function resolveModel(key: string): Promise<string> {
+  const configured = process.env.GEMINI_MODEL?.trim();
+  if (configured) return configured;
+  return (await listFlashModels(key))[0] ?? "gemini-flash-latest";
+}
+
+/** Ordered models to try: configured ones, then the three newest Flash models, then the "latest" alias. */
+async function candidateModels(key: string): Promise<string[]> {
+  const configured = [process.env.GEMINI_MODEL, process.env.GEMINI_TEXT_MODEL].map((m) => m?.trim()).filter((m): m is string => Boolean(m));
+  const listed = await listFlashModels(key).catch(() => [] as string[]);
+  return [...new Set([...configured, ...listed.slice(0, 3), "gemini-flash-latest"])];
+}
+
+const MAX_ATTEMPTS = 8;
+
+/**
+ * One Gemini text call with fallbacks. A retired model (404), a busy model (429/5xx), a timeout or
+ * an empty answer moves on to the next model; a rejected key (400/401/403) moves on to the backup key.
+ */
+export async function generateText(input: {
+  system: string;
+  prompt: string;
+  temperature: number;
+  maxOutputTokens: number;
+  purpose: string;
+  /** Ask Gemini for a JSON object instead of prose. */
+  json?: boolean;
+  /** Optional image (base64) for vision prompts. */
+  image?: { data: string; mime: string };
+}): Promise<{ text: string; model: string }> {
+  const keys = [process.env.GEMINI_API_KEY?.trim(), process.env.GEMINI_API_KEY_BACKUP?.trim()].filter((k): k is string => Boolean(k));
+  if (!keys.length) throw new HttpError(503, "AI_NOT_CONFIGURED", `AI ${input.purpose} is not configured on this server.`);
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: input.system }] },
+    contents: [{ role: "user", parts: [...(input.image ? [{ inlineData: { mimeType: input.image.mime, data: input.image.data } }] : []), { text: input.prompt }] }],
+    generationConfig: {
+      temperature: input.temperature,
+      maxOutputTokens: input.maxOutputTokens,
+      ...(input.json ? { responseMimeType: "application/json" } : {}),
+    },
+  });
+  let attempts = 0;
+  let sawEmpty = false;
+  for (const key of [...new Set(keys)]) {
+    for (const model of await candidateModels(key)) {
+      if (attempts++ >= MAX_ATTEMPTS) break;
+      let response: Response;
+      try {
+        response = await fetchWithTimeout(`${API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body,
+        });
+      } catch {
+        continue;
+      }
+      if ([400, 401, 403].includes(response.status)) break;
+      if (!response.ok) continue;
+      const json = (await response.json().catch(() => null)) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      } | null;
+      const text = (json?.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("").trim();
+      if (text) return { text, model };
+      sawEmpty = true;
+    }
+  }
+  if (sawEmpty) throw new HttpError(502, "AI_EMPTY", "The AI service returned no answer. Try again.");
+  throw new HttpError(502, "AI_UNAVAILABLE", `Gemini is busy or unavailable right now, so the ${input.purpose} could not be written. Try again in a minute.`);
 }
 
 export async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
@@ -123,30 +194,13 @@ export async function draftReply(input: {
   transcript: TranscriptLine[];
   language: Language;
 }): Promise<{ draft: string; model: string }> {
-  const key = process.env.GEMINI_API_KEY?.trim();
-  if (!key) throw new HttpError(503, "AI_NOT_CONFIGURED", "AI drafting is not configured on this server.");
-  const model = await resolveModel(key);
-  const response = await fetchWithTimeout(`${API_BASE}/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [{ role: "user", parts: [{ text: buildPrompt(input) }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 400 },
-    }),
+  const { text, model } = await generateText({
+    system: SYSTEM_PROMPT,
+    prompt: buildPrompt(input),
+    temperature: 0.3,
+    // Newer Flash models spend part of this budget on reasoning; the prompt keeps the reply short.
+    maxOutputTokens: 2048,
+    purpose: "reply draft",
   });
-  const json = (await response.json().catch(() => null)) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
-    error?: { message?: string };
-  } | null;
-  if (!response.ok) {
-    if (response.status === 404) cachedModel = null;
-    throw new HttpError(502, "AI_UNAVAILABLE", "The AI service could not draft a reply right now.");
-  }
-  const text = (json?.candidates?.[0]?.content?.parts ?? [])
-    .map((part) => part.text ?? "")
-    .join("")
-    .trim();
-  if (!text) throw new HttpError(502, "AI_EMPTY", "The AI service returned no draft. Try again.");
   return { draft: text.slice(0, 1200), model };
 }

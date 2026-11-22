@@ -16,23 +16,30 @@ import { useRoute } from "../ui/route";
 import { useToast } from "../ui/Toast";
 
 /**
- * Presenter controls for features this Nexconn App Key does not include. Voice and video
- * calling is Nexconn's paid Audio & Video service; these controls run the real call screens
- * as a demo on this device only. Every demo surface is labelled, nothing is sent to Nexconn,
+ * Presenter controls for features this app key does not include. Voice and video calling is
+ * the chat service's paid Audio & Video add-on; these controls run the real call screens as a
+ * demo on this device only. Every demo surface is labelled, nothing is sent to the service,
  * and nothing is written into the conversation.
  */
 
-type Kind = "live" | "custom" | "demo";
+type Kind = "ai" | "live" | "custom" | "demo";
 const FEATURES: { feature: string; api: string; kind: Kind }[] = [
-  { feature: "Order conversations, presence", api: "NCEngine.connect · DirectChannel", kind: "live" },
-  { feature: "Text, photos, reply, read receipts, typing", api: "sendMessage · sendMediaMessage · sendReadReceiptResponse · sendTypingStatus", kind: "live" },
-  { feature: "Auto-translation", api: "Nexconn translation (Console)", kind: "live" },
+  { feature: "Voice agent: orders, returns, stock, offers, batch delay notices, proactive briefing", api: "Gemini Live native audio · function calling · server-checked tools", kind: "ai" },
+  { feature: "Support triage: summary, urgency, mood, suggested resolution", api: "Gemini Flash JSON · policy overrides the model", kind: "ai" },
+  { feature: "Support reply drafts", api: "Gemini Flash · grounded in the order record", kind: "ai" },
+  { feature: "Smart replies in seller and support chat", api: "Gemini Flash · from the live conversation", kind: "ai" },
+  { feature: "Listing drafted from the cover photo", api: "Gemini Flash vision · seller reviews and prices", kind: "ai" },
+  { feature: "Daily digest in 4 languages", api: "Gemini Flash · database facts only", kind: "ai" },
+  { feature: "Order conversations, presence", api: "Realtime chat channels", kind: "live" },
+  { feature: "Text, photos, reply, read receipts, typing", api: "Realtime messaging · media · receipts · typing status", kind: "live" },
+  { feature: "Auto-translation", api: "Automatic message translation", kind: "live" },
+  { feature: "Live sale rooms", api: "Open rooms · live viewer count · server-posted sales", kind: "live" },
   { feature: "Reactions, edit, offers, tracking", api: "Custom messages SB:Reaction · SB:Edit · SB:Offer · SB:Track", kind: "custom" },
   { feature: "Support escalation and history", api: "ShopBridge server + SB:System messages", kind: "custom" },
-  { feature: "Voice and video calls", api: "NCCallEngine startCall · acceptCall (needs paid Audio & Video)", kind: "demo" },
+  { feature: "Voice and video calls", api: "Call engine startCall · acceptCall (paid add-on)", kind: "demo" },
   { feature: "Mute, camera, switch to video", api: "enableMicrophone · enableCamera · requestChangeMediaType", kind: "demo" },
 ];
-const KIND_LABEL: Record<Kind, string> = { live: "Live · Nexconn", custom: "Custom", demo: "Paid · demo" };
+const KIND_LABEL: Record<Kind, string> = { ai: "Gemini", live: "Live", custom: "Custom", demo: "Paid · demo" };
 
 function useCall(): CallState | null {
   return useSyncExternalStore(subscribeCall, callState, () => null);
@@ -96,8 +103,8 @@ export function DemoPanel() {
           <header>
             <h2>Demo controls</h2>
             <p>
-              Voice and video calling is Nexconn's paid Audio &amp; Video service, which is not enabled for this App Key.
-              Demo calls run the real call screens on this device only: nothing is sent to Nexconn and no call is saved to
+              Voice and video calling is a paid add-on of the chat service, which is not enabled for this app.
+              Demo calls run the real call screens on this device only: nothing is sent anywhere and no call is saved to
               the conversation. Your own camera preview is real; the other person is simulated.
             </p>
           </header>
@@ -107,7 +114,7 @@ export function DemoPanel() {
             <span className="demo-switch-ui" aria-hidden="true" />
             <span>
               <b>Call buttons place demo calls</b>
-              <small>{demoCalls ? "On for this device. Calls are labelled “Demo call”." : "Off: call buttons use Nexconn (refused with 80006 until Audio & Video is enabled)."}</small>
+              <small>{demoCalls ? "On for this device. Calls are labelled “Demo call”." : "Off: call buttons place real calls (refused with code 80006 until calling is enabled)."}</small>
             </span>
           </label>
 
@@ -156,7 +163,7 @@ export function DemoPanel() {
             </button>
           </div>
 
-          <h3>Feature → Nexconn</h3>
+          <h3>Feature → technology</h3>
           <table className="demo-map">
             <tbody>
               {FEATURES.map((row) => (

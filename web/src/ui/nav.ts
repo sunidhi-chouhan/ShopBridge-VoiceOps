@@ -1,6 +1,6 @@
 import type { Role } from "../../../shared/types";
 
-export type Section = "shop" | "orders" | "inbox" | "account" | "products" | "queue" | "voice";
+export type Section = "shop" | "live" | "orders" | "inbox" | "account" | "products" | "queue" | "voice";
 
 export function roleLabel(role: Role): string {
   if (role === "member") return "Buyer";
@@ -18,6 +18,7 @@ export function navItems(role: Role): { id: Section; label: string }[] {
   if (role === "member") {
     return [
       { id: "shop", label: "Shop" },
+      { id: "live", label: "Live" },
       { id: "orders", label: "Orders" },
       { id: "inbox", label: "Inbox" },
       { id: "account", label: "Account" },
@@ -28,6 +29,7 @@ export function navItems(role: Role): { id: Section; label: string }[] {
       { id: "voice", label: "Voice AI" },
       { id: "orders", label: "Orders" },
       { id: "inbox", label: "Inbox" },
+      { id: "live", label: "Live" },
       { id: "products", label: "Products" },
     ];
   }
@@ -73,7 +75,7 @@ export function emptyCopy(section: Section, role: Role): {
   }
   return {
     title: "No conversation yet.",
-    detail: "Open a request in the queue to join its Nexconn room.",
+    detail: "Open a request in the queue to join its conversation.",
     actionLabel: "Open Queue",
     action: "queue",
     scene: "inbox",

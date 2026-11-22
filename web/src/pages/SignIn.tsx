@@ -7,6 +7,34 @@ import { Hall } from "../ui/Hall";
 import { easeOut, fadeUp, stagger, useMotionOn } from "../ui/motion";
 import { RevealHeadline } from "../ui/Reveal";
 import { AiStory } from "../ai/AiStory";
+import { HeroBoard } from "../ui/HeroBoard";
+import { Marquee, RotatingWord } from "../ui/flair";
+
+/** Languages the voice agent and the translated order chat handle (rotates under the headline). */
+const LANGS = [
+  { text: "हिन्दी.", lang: "hi" },
+  { text: "Hinglish.", lang: "en" },
+  { text: "தமிழ்.", lang: "ta" },
+  { text: "English.", lang: "en" },
+];
+
+const FEATURES = [
+  "Gemini Live voice agent",
+  "Hindi · Hinglish · Tamil",
+  "Spoken read-back before every change",
+  "Guardrails: AI proposes, server decides",
+  "Gemini triage for support",
+  "Smart replies in chat",
+  "Listings drafted from a photo",
+  "One approval, many customers",
+  "AI reply drafts for support",
+  "Live translation",
+  "Live sale rooms",
+  "Voice notes → text",
+  "Video calls",
+  "Support joins with full history",
+  "Server-verified offers",
+];
 
 type Mode = "signin" | "register";
 
@@ -109,6 +137,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
         <a className="wordmark hall-mark" href="#main">
           {copy.name}
         </a>
+        <span className="gemini-mark"><span aria-hidden="true">✦</span> Powered by Gemini</span>
         {motionOn ? (
           <button
             type="button"
@@ -133,6 +162,14 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
           </motion.p>
           <RevealHeadline className="hall-title" />
           <motion.p
+            className="hall-title hall-title-mix hero-lang"
+            initial={motionOn ? { opacity: 0 } : false}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.6, duration: 0.6 }}
+          >
+            <span className="line-lang">in <RotatingWord words={LANGS} paused={paused} /></span>
+          </motion.p>
+          <motion.p
             className="lede"
             initial={motionOn ? { opacity: 0, y: 12 } : false}
             animate={{ opacity: 1, y: 0 }}
@@ -153,6 +190,27 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
           >
             See how the AI works <span aria-hidden="true">↓</span>
           </motion.a>
+          <motion.ul
+            className="hero-chips"
+            aria-label="Built with"
+            initial={motionOn ? "hidden" : false}
+            animate="show"
+            variants={stagger}
+          >
+            {["Gemini Live voice AI", "Live translation", "Live rooms", "Voice & video"].map((chip) => (
+              <motion.li key={chip} variants={fadeUp}>
+                {chip}
+              </motion.li>
+            ))}
+          </motion.ul>
+          <motion.div
+            className="hero-board-wrap"
+            initial={motionOn ? { opacity: 0, y: 24, rotate: 2 } : false}
+            animate={{ opacity: 1, y: 0, rotate: 0 }}
+            transition={{ delay: 1, duration: 0.9, ease: easeOut }}
+          >
+            <HeroBoard paused={paused} />
+          </motion.div>
         </div>
         <motion.form
           className="hall-enter"
@@ -284,6 +342,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: PublicUser) => void 
           </motion.section>
         </motion.form>
       </div>
+      <Marquee label="What ShopBridge does" items={FEATURES} speed={42} />
     </div>
       <AiStory variant="landing" onTry={busy ? undefined : () => void onDemo("seller")} />
     </main>
