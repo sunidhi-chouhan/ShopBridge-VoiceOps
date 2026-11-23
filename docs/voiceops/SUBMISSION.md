@@ -28,6 +28,17 @@ Nexconn order chat -> spoken confirmation, transcript, action timeline and Activ
   automated. **Undo** is available for status, cancel, return and stock changes.
 - **Visibility:** live tool timeline with milliseconds, approval cards, Activity log marking human involvement, Overview metrics.
 
+### Multi-agent system and reasoning engine
+- **Agent team** (`server/agents/team.ts`, Voice AI → *Agent network*): an **Operations monitor** observes the shop; the **Supervisor** plans
+  with Gemini (JSON, with a rule-based fallback) and hands tasks to specialists: **Customer-comms** (drafts delay updates with Gemini),
+  **Inventory** (proposes restocks) and **Support-triage** (Gemini triage and a recommended resolution for the support desk). Every
+  observation, plan, handoff, proposal and decision is stored as a step and shown live on an agent diagram.
+- **Reasoning engine** (`server/agents/reasoning.ts`): every proposal, from the voice agent or any team agent, gets a decision trace: facts
+  considered, each shop rule checked (passed or failed, why), a verdict (*allowed*, *needs your yes*, *blocked*, *escalate to a person*) and
+  a plain-language explanation. Gemini proposes; the rules decide. The voice timeline shows it as a **Why** panel.
+- **Safe autonomy:** agents never write data themselves. Their proposals go through the same orchestrator (ownership, policy,
+  idempotency, audit) and wait for a human approval; the seller can start the team by voice ("team ko shop check karne do").
+
 ### Where Gemini automates the work (all suggestions or approved actions; nothing moves money)
 | Who | Automation | Gemini | Human control |
 |---|---|---|---|

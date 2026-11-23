@@ -4515,3 +4515,58 @@ html, body, #root {
 @media (prefers-reduced-motion: reduce) { .dash-live-dot { animation: none; } .dash-att { transition: none; } }
 .dash-econ-tile.is-bad .dash-econ-value { color: var(--danger); }
 .dash .vo-roi-inputs { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+
+/* Reasoning-engine trace (voice timeline cards and agent steps) */
+.trace { margin-top: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 8px 12px; }
+.trace summary { cursor: pointer; display: flex; align-items: center; gap: 10px; list-style: none; }
+.trace summary::-webkit-details-marker { display: none; }
+.trace-k { font-family: var(--ai-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ai-violet); }
+.trace-verdict { font-size: 0.78rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.trace-verdict.is-ok { background: var(--success-soft); color: var(--success); }
+.trace-verdict.is-wait { background: var(--warning-soft); color: var(--warning); }
+.trace-verdict.is-bad { background: var(--danger-soft); color: var(--danger); }
+.trace-verdict.is-esc { background: var(--ai-violet-soft); color: var(--ai-violet); }
+.trace-intent { margin: 8px 0 6px; font-weight: 600; }
+.trace-facts { margin: 0 0 8px; display: grid; gap: 2px; font-size: 0.85rem; }
+.trace-facts div { display: flex; gap: 8px; }
+.trace-facts dt { color: var(--muted); min-width: 92px; }
+.trace-facts dd { margin: 0; }
+.trace-checks { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; font-size: 0.86rem; }
+.trace-checks li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; line-height: 1.4; }
+.trace-mark { font-weight: 700; }
+.trace-checks .is-pass .trace-mark { color: var(--success); }
+.trace-checks .is-fail .trace-mark { color: var(--danger); }
+.trace-checks .is-warn .trace-mark { color: var(--warning); }
+.trace-why { margin: 8px 0 2px; color: var(--ink-2); font-size: 0.86rem; }
+
+/* Agent network */
+.an { display: grid; gap: 20px; padding-bottom: 32px; }
+.an-h { font-family: var(--display); font-size: 1.6rem; font-weight: 500; letter-spacing: -0.02em; margin: 4px 0 2px; }
+.an-diagram { width: 100%; height: auto; max-height: 420px; }
+.an-edge { stroke: var(--line); stroke-width: 2; }
+.an-edge.is-used { stroke: var(--ai-violet); stroke-opacity: 0.45; }
+.an-edge.is-active { stroke: var(--ai-violet); stroke-width: 3; stroke-dasharray: 8 6; animation: an-flow 0.8s linear infinite; }
+@keyframes an-flow { to { stroke-dashoffset: -14; } }
+.an-arrowhead { fill: var(--muted); }
+.an-node rect { fill: var(--raised); stroke: var(--line); stroke-width: 1.5; }
+.an-node.is-touched rect { stroke: var(--ai-violet); }
+.an-node.is-active rect { stroke: var(--ai-violet); stroke-width: 3; filter: drop-shadow(0 0 10px rgba(98, 80, 214, 0.45)); }
+.an-node.is-rules rect { fill: var(--ai-violet-soft); }
+.an-node.is-human rect { fill: var(--warning-soft); }
+.an-node-name { font-size: 14px; font-weight: 700; fill: var(--ink); font-family: var(--font); }
+.an-node-role { font-size: 10.5px; fill: var(--muted); font-family: var(--font); }
+.an-node-count { font-size: 11px; font-weight: 700; fill: var(--ai-violet); font-family: var(--ai-mono); }
+.an-status { margin: 0; color: var(--muted); font-size: 0.88rem; }
+.an-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: an; }
+.an-step { counter-increment: an; position: relative; padding: 12px 14px 12px 44px; border-radius: 14px; border: 1px solid var(--line); background: var(--surface); }
+.an-step::before { content: counter(an); position: absolute; left: 12px; top: 12px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--ai-violet-soft); color: var(--ai-violet); }
+.an-step.is-decide { border-color: var(--ai-violet); }
+.an-step.is-error { border-color: var(--danger); }
+.an-step-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.an-agent { font-weight: 700; }
+.an-to { color: var(--muted); font-weight: 500; }
+.an-kind { font-family: var(--ai-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+.an-title { margin: 6px 0 0; }
+.an-detail { margin: 4px 0 0; color: var(--ink-2); font-size: 0.88rem; white-space: pre-wrap; }
+.an-state { margin: 8px 0 0; font-size: 0.86rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { .an-edge.is-active { animation: none; } }

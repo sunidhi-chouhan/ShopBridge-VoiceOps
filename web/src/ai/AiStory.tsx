@@ -206,6 +206,8 @@ export function AiStory({ variant, onTry, measured }: { variant: "landing" | "ap
             <li>Chooses the next step and calls the shop's tools</li>
             <li>Explains blocks and suggests the alternative</li>
             <li>Drafts customer messages in the customer's language</li>
+            <li>Runs as a team: a Supervisor plans and hands tasks to comms, inventory and triage agents</li>
+            <li>Explains every decision: the facts, the rules checked and why it was allowed or blocked</li>
             <li>Briefs the seller on what needs attention when a session opens</li>
             <li>Sends one delay update to every late customer with a single yes</li>
             <li>Offers special prices, within a discount limit</li>

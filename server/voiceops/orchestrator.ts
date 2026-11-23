@@ -13,6 +13,7 @@ import { getPool } from "../db/pool";
 import { HttpError } from "../errors";
 import type { UserRecord } from "../store-types";
 import * as policy from "./policy";
+import { buildTrace, type Facts, type Trace } from "../agents/reasoning";
 
 /** Posts an order-chat event. `extra.card` asks for a rich card (for example the offer card) instead of plain text. */
 export type Notifier = (channelId: string | null, text: string, extra?: { orderId: string; card?: "offer" }) => Promise<boolean>;
@@ -27,6 +28,8 @@ export type ToolResult = {
   code?: string;
   approval?: { id: string; readback: string; expiresAt: string; duplicate?: boolean };
   latencyMs: number;
+  /** Reasoning-engine decision trace: facts considered, rules checked, verdict and why. */
+  trace?: Trace;
 };
 
 class ToolError extends Error {
@@ -434,6 +437,15 @@ const readTools: Record<string, ReadTool> = {
     const res = await client.query("SELECT name, stock FROM products WHERE seller_id = $1 AND stock <= $2 ORDER BY stock, name LIMIT 20", [ctx.user.id, threshold]);
     return { data: { threshold, products: res.rows }, message: `${res.rows.length} products at or below ${threshold}.` };
   },
+  async run_agent_team(_client, ctx) {
+    // Dynamic import: the team module itself calls this orchestrator.
+    const { startTeamRun } = await import("../agents/team");
+    const { runId, reused } = await startTeamRun(ctx.user, "voice", ctx.notifier);
+    return {
+      data: { run_id: runId, reused },
+      message: reused ? "The agent team is already working; its proposals will appear for approval." : "The agent team has started: the supervisor will plan and the specialists will propose actions for approval on the Agent network tab.",
+    };
+  },
   async business_summary(client, ctx) {
     const data = await summaryFor(client, ctx.user.id);
     return { data, message: "Business summary ready." };
@@ -474,6 +486,7 @@ export const toolDeclarations = [
   { name: "create_return", description: "Start a return for a delivered order inside the 7-day window. Never refunds money. The reason is optional; do not ask for one if the seller did not give it.", parameters: { type: "object", properties: { order_no: orderNo, reason: { type: "string", description: "Optional. Defaults to a seller-initiated return." } }, required: ["order_no"] } },
   { name: "send_customer_message", description: "Send a short message to the customer in their order conversation. Draft the text yourself in the customer's language.", parameters: { type: "object", properties: { order_no: orderNo, message: { type: "string" }, language: { type: "string" } }, required: ["order_no", "message"] } },
   { name: "adjust_stock", description: "Change a product's stock by delta, or set it to an exact number.", parameters: { type: "object", properties: { product_name: { type: "string" }, delta: { type: "integer" }, set_to: { type: "integer" } }, required: ["product_name"] } },
+  { name: "run_agent_team", description: "Ask the team of AI agents (supervisor, comms, inventory, support triage) to check the whole shop and propose actions. Use when the seller asks the team to look after things, or for a full check. Their proposals still need the seller's approval.", parameters: { type: "object", properties: {} } },
   { name: "make_offer", description: "Offer the customer a special (lower) price on an order that has not shipped. Needs approval. The buyer accepts or declines in the order chat.", parameters: { type: "object", properties: { order_no: orderNo, amount: { type: "integer", description: "New total in rupees, lower than the current price." }, note: { type: "string" } }, required: ["order_no", "amount"] } },
   { name: "notify_delayed_customers", description: "Send ONE delay update to every delayed customer (or to the given order numbers) with a single approval. Draft a short, polite message without names; each customer's first name is added automatically.", parameters: { type: "object", properties: { message: { type: "string" }, order_nos: { type: "array", items: { type: "integer" } }, language: { type: "string" } }, required: ["message"] } },
   { name: "request_human_review", description: "Escalate when the request is unclear, out of policy or risky.", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
@@ -521,11 +534,49 @@ async function record(
   return actionId;
 }
 
+/** Facts the reasoning engine needs for a proposal (read-only; failures become "not found" facts). */
+async function gatherFacts(ctx: Ctx, name: string, args: Record<string, unknown>): Promise<Facts> {
+  const facts: Facts = { args };
+  const client = await getPool().connect();
+  try {
+    if (args.order_no !== undefined) {
+      try {
+        const o = await loadOrder(client, ctx.user.id, args.order_no);
+        const extra = (await client.query(
+          `SELECT o.original_total, o.offer_state, EXISTS (SELECT 1 FROM voiceops_returns r WHERE r.order_id = o.id AND r.state = 'requested') AS open_return
+             FROM orders o WHERE o.id = $1`, [o.id])).rows[0] ?? {};
+        facts.order = { order_no: o.order_no, status: o.status, customer: o.buyer_name, total: o.total, created_at: o.created_at, updated_at: o.updated_at, owned: true,
+          open_return: Boolean(extra.open_return), original_total: extra.original_total === null || extra.original_total === undefined ? null : Number(extra.original_total), offer_state: extra.offer_state ?? null };
+      } catch {
+        facts.order = { order_no: Number(args.order_no), status: "unknown", customer: "?", total: 0, created_at: new Date().toISOString(), updated_at: null, owned: false };
+      }
+    }
+    if (name === "adjust_stock") {
+      try {
+        const p = await findProduct(client, ctx.user.id, args);
+        facts.product = { name: p.name, stock: Number(p.stock), found: true, matches: 1 };
+      } catch {
+        facts.product = { name: String(args.product_name ?? ""), stock: 0, found: false };
+      }
+    }
+    if (name === "notify_delayed_customers") {
+      await ensureOrderNumbers(client, ctx.user.id);
+      const rows = (await client.query(`${ORDER_SELECT} WHERE o.seller_id = $1`, [ctx.user.id])).rows.map(normRow);
+      const wanted = Array.isArray(args.order_nos) && args.order_nos.length ? new Set(args.order_nos.map(Number)) : null;
+      facts.delayedCount = rows.filter((r) => policy.isDelayed(r.status, r.created_at) && (!wanted || wanted.has(r.order_no))).length;
+    }
+  } finally {
+    client.release();
+  }
+  return facts;
+}
+
 export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise<ToolResult> {
   assertSeller(ctx.user);
   await ownSession(ctx);
   const started = Date.now();
   const args = rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? (rawArgs as Record<string, unknown>) : {};
+  let trace: Trace | undefined;
   try {
     if (name === "confirm_action") {
       return await decideApproval(ctx, String(args.approval_id ?? ""), "approve", "voice", String(args.user_words ?? ""));
@@ -537,11 +588,13 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
     if (read) {
       const out = await tx((client) => read(client, ctx, args));
       const ms = Date.now() - started;
+      trace = buildTrace(name, { args });
       const actionId = await record(ctx, name, args, "succeeded", { result: out.data, ms });
-      return { ok: true, status: "succeeded", actionId, message: out.message, data: out.data, latencyMs: ms };
+      return { ok: true, status: "succeeded", actionId, message: out.message, data: out.data, latencyMs: ms, trace };
     }
     const write = writeTools[name];
     if (!write) throw new ToolError("UNKNOWN_TOOL", `There is no tool called ${name}.`);
+    trace = buildTrace(name, await gatherFacts(ctx, name, args));
 
     const prepared = await tx((client) => write.prepare(client, ctx, args));
     const hash = hashArgs(ctx.user.id, name, prepared.args);
@@ -563,7 +616,7 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
     const approvalId = id("apr");
     const expiresAt = new Date(Date.now() + policy.APPROVAL_TTL_MS).toISOString();
     const ms = Date.now() - started;
-    const actionId = await record(ctx, name, prepared.args, "awaiting_approval", { ms });
+    const actionId = await record(ctx, name, prepared.args, "awaiting_approval", { ms, result: { trace } });
     await getPool().query(
       `INSERT INTO voiceops_approvals (id, session_id, user_id, tool, args, args_hash, readback, expires_at, action_id)
        VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)`,
@@ -571,14 +624,14 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
     );
     return {
       ok: true, status: "awaiting_approval", actionId, approval: { id: approvalId, readback: prepared.readback, expiresAt },
-      message: `Read this back to the seller and wait for a clear yes: ${prepared.readback}`, latencyMs: ms,
+      message: `Read this back to the seller and wait for a clear yes: ${prepared.readback}`, latencyMs: ms, trace,
     };
   } catch (error) {
     if (error instanceof HttpError) throw error;
     const ms = Date.now() - started;
     if (error instanceof ToolError) {
-      const actionId = await record(ctx, name, args, error.kind, { code: error.code, result: { message: error.message }, ms });
-      return { ok: false, status: error.kind, actionId, code: error.code, message: error.message, latencyMs: ms };
+      const actionId = await record(ctx, name, args, error.kind, { code: error.code, result: { message: error.message, trace }, ms });
+      return { ok: false, status: error.kind, actionId, code: error.code, message: error.message, latencyMs: ms, trace };
     }
     console.error(`VoiceOps tool ${name} failed:`, error);
     const actionId = await record(ctx, name, args, "failed", { code: "INTERNAL", ms });

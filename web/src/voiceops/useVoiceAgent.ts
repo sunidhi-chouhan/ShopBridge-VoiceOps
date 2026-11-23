@@ -13,6 +13,7 @@ export type TimelineItem = {
   actionId?: string;
   approval?: { id: string; readback: string; expiresAt: string };
   humanInvolved?: boolean;
+  trace?: import("../ai/TraceView").DecisionTrace;
   at: number;
 };
 
@@ -79,7 +80,7 @@ export function useVoiceAgent(onDataChanged: () => void) {
           const at = prev.length - 1 - i;
           return prev.map((t, idx) =>
             idx === at
-              ? { ...t, status: event.result.status, message: event.result.message, latencyMs: event.result.latencyMs, actionId: event.result.actionId, approval: event.result.approval }
+              ? { ...t, status: event.result.status, message: event.result.message, latencyMs: event.result.latencyMs, actionId: event.result.actionId, approval: event.result.approval, trace: event.result.trace }
               : t,
           );
         });

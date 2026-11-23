@@ -95,6 +95,10 @@ See `RENDER.md`. `render.yaml` creates the Render web service and Postgres datab
 
 ## VoiceOps: voice-driven agentic workflows (Gemini Live)
 
+Multi-agent team + reasoning engine: a Supervisor (Gemini planner) coordinates an Operations monitor, Customer-comms, Inventory and
+Support-triage agents; every proposal passes a rules-based reasoning engine that records a decision trace (facts, rules, verdict, why)
+before a human approves (`server/agents/`, Voice AI → Agent network).
+
 Gemini automation across the app (details in `docs/voiceops/SUBMISSION.md`): the seller voice agent (orders, returns, stock,
 messages, special-price offers, one-approval delay notices to every late customer, proactive briefing), Gemini triage of the
 support queue with a policy-checked suggested resolution, smart replies in seller and support chat, listings drafted from the

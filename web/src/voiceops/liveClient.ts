@@ -12,6 +12,7 @@ export type ToolResultPayload = {
   code?: string;
   approval?: { id: string; readback: string; expiresAt: string; duplicate?: boolean };
   latencyMs: number;
+  trace?: import("../ai/TraceView").DecisionTrace;
 };
 
 export type LiveEvent =

@@ -5,6 +5,7 @@ import { demoEnabled, resetDemoScenario } from "./demo";
 import { DIGEST_AUDIENCES, DIGEST_LANGUAGES, dailyDigest, type DigestAudience, type DigestLanguage } from "./digest";
 import * as orchestrator from "./orchestrator";
 import { runPreflight } from "./preflight";
+import { listTeamRuns, startTeamRun } from "../agents/team";
 
 export type RouteDeps = {
   currentUser: (req: IncomingMessage) => Promise<UserRecord>;
@@ -64,6 +65,15 @@ export async function handleVoiceOpsApi(req: IncomingMessage, res: ServerRespons
   const baselineDelete = pathname.match(/^\/api\/voiceops\/baselines\/([a-z0-9_]+)$/);
   if (method === "DELETE" && baselineDelete) {
     deps.sendJson(res, 200, await orchestrator.deleteBaseline(user, baselineDelete[1]));
+    return true;
+  }
+  // Multi-agent team: start a run (returns at once) and follow its steps.
+  if (method === "POST" && pathname === "/api/voiceops/agents/run") {
+    deps.sendJson(res, 202, await startTeamRun(user, "dashboard", deps.notifier));
+    return true;
+  }
+  if (method === "GET" && pathname === "/api/voiceops/agents/runs") {
+    deps.sendJson(res, 200, { runs: await listTeamRuns(user) });
     return true;
   }
   if (method === "GET" && pathname === "/api/voiceops/activity") {

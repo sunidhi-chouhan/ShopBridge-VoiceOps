@@ -22,8 +22,10 @@ import { useVoice } from "./VoiceContext";
 import { BaselineCard, RoiCalculator } from "./Economics";
 import { Attention, DashHero, DashSection, EconomicsTiles, KpiRow, LatencyChart, OutcomeBar } from "./Dashboard";
 import { AiStory } from "../ai/AiStory";
+import { TraceView } from "../ai/TraceView";
+import { AgentNetwork } from "../ai/AgentNetwork";
 
-type Tab = "agent" | "how" | "approvals" | "activity" | "overview";
+type Tab = "agent" | "team" | "how" | "approvals" | "activity" | "overview";
 
 const TOOL_LABEL: Record<string, string> = {
   business_summary: "Business summary",
@@ -37,6 +39,7 @@ const TOOL_LABEL: Record<string, string> = {
   adjust_stock: "Adjust stock",
   request_human_review: "Ask a human",
   make_offer: "Offer special price",
+  run_agent_team: "Ask the agent team",
   notify_delayed_customers: "Notify delayed customers",
   undo_action: "Undo",
 };
@@ -177,6 +180,7 @@ function ActionCard({
       ) : item.message ? (
         <p className="vo-msg">{item.message}</p>
       ) : null}
+      {item.trace && item.trace.verdict !== "allowed" ? <TraceView trace={item.trace} open={item.status === "blocked"} /> : null}
       <div className="vo-meta">
         {item.latencyMs !== undefined ? <span>{item.latencyMs} ms</span> : null}
         {item.humanInvolved ? <span>Human approved</span> : null}
@@ -485,7 +489,7 @@ export function VoiceOps() {
     // Each tab starts at its top, even when the previous tab was scrolled far down.
     window.requestAnimationFrame(() => tabBar.current?.scrollIntoView({ block: "nearest" }));
   };
-  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
+  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["team", "Agent network"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
   return (
     <div className="vo-page">
       <div className="vo-tabs" role="tablist" ref={tabBar}>
@@ -494,6 +498,7 @@ export function VoiceOps() {
         ))}
       </div>
       <div hidden={tab !== "agent"}><AgentTab agent={agent} refresh={refresh} /></div>
+      {tab === "team" ? <AgentNetwork refresh={refresh} /> : null}
       {tab === "how" ? (
         <AiStory
           variant="app"

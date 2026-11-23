@@ -11,8 +11,12 @@ Per scene: the active camera's screencast frames timed by capture timestamp; wai
 (fast_start/fast_end) play 4x faster with a label; audio = narration + the seller's real voice + the agent's live
 replies, mixed on the original timeline and cut with the same segments (silent while sped up).
 """
+import array
+import base64
 import bisect
+import hashlib
 import json
+import urllib.request
 import os
 import subprocess
 import sys
@@ -37,6 +41,106 @@ FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 WORK = os.path.abspath("video-build/assemble")
 os.makedirs(WORK, exist_ok=True)
 NARR = {s["id"]: s for s in json.load(open("scripts/video/narration.json"))["scenes"]}
+
+# ---------------------------------------------------------------------------
+# Gap narration: silences longer than GAP_S are explained with a short spoken line
+# ---------------------------------------------------------------------------
+GAP_S = 5.0
+MAX_SILENCE_S = 4.8   # silences still longer than this after explanations are shortened
+KEEP_SILENCE_S = 2.0  # to this many seconds
+GAP_DIR = os.path.abspath("video-build/gap-narration")
+os.makedirs(GAP_DIR, exist_ok=True)
+ENV = {}
+for line in open(".env"):
+    if "=" in line and not line.lstrip().startswith("#"):
+        k, v = line.rstrip("\n").split("=", 1)
+        ENV[k.strip()] = v.strip().strip("'\"")
+KEYS = [ENV.get("GEMINI_API_KEY"), ENV.get("GEMINI_API_KEY_BACKUP")] + [ENV.get(f"GEMINI_API_KEY_BACKUP_{i}") for i in range(2, 10)]
+KEYS = [k for k in KEYS if k]
+VOICE = json.load(open("scripts/video/narration.json")).get("voice", "Kore")
+TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"]
+
+
+def tts_line(text):
+    """Speak one explanation line with Gemini TTS (plain text only), cached; returns 48 kHz mono int16 samples."""
+    key = hashlib.sha1(f"{VOICE}|{text}".encode()).hexdigest()[:16]
+    out48 = os.path.join(GAP_DIR, f"{key}-48k.wav")
+    if not os.path.exists(out48):
+        pcm, rate = None, 24000
+        for model in TTS_MODELS:
+            for api_key in KEYS:
+                body = json.dumps({
+                    "contents": [{"parts": [{"text": text}]}],
+                    "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": VOICE}}}},
+                }).encode()
+                req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", data=body, headers={"Content-Type": "application/json", "x-goog-api-key": api_key})
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as r:
+                        j = json.load(r)
+                except Exception:
+                    continue
+                part = next((p for p in j.get("candidates", [{}])[0].get("content", {}).get("parts", []) if "inlineData" in p), None)
+                if part:
+                    pcm = base64.b64decode(part["inlineData"]["data"])
+                    m = part["inlineData"].get("mimeType", "")
+                    rate = int(m.split("rate=")[1].split(";")[0]) if "rate=" in m else 24000
+                    break
+            if pcm:
+                break
+        if not pcm:
+            print(f"    ! TTS failed for: {text[:60]}")
+            return None
+        raw = os.path.join(GAP_DIR, f"{key}-raw.wav")
+        with wave.open(raw, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
+        run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", raw, "-ar", str(RATE), "-ac", "1", out48])
+    with wave.open(out48) as w:
+        return array.array("h", w.readframes(w.getnframes()))
+
+
+def silent_gaps(samples, min_s):
+    """[(start_s, end_s)] where the audio stays quieter than about -40 dBFS for at least min_s."""
+    win = RATE // 10
+    gaps, start = [], None
+    for i in range(0, len(samples), win):
+        chunk = samples[i:i + win]
+        rms = (sum(x * x for x in chunk[::8]) / max(1, len(chunk[::8]))) ** 0.5
+        t = i / RATE
+        if rms < 330:
+            start = t if start is None else start
+        else:
+            if start is not None and t - start >= min_s:
+                gaps.append((start, t))
+            start = None
+    if start is not None and len(samples) / RATE - start >= min_s:
+        gaps.append((start, len(samples) / RATE))
+    return gaps
+
+
+def fill_gaps(pcm_bytes, notes):
+    """Mix an explanation into every silence > GAP_S that it fits, using the latest note before the gap."""
+    samples = array.array("h", bytes(pcm_bytes))
+    used = set()
+    placed = 0
+    for gs, ge in silent_gaps(samples, GAP_S):
+        cands = [n for n in notes if n[1] not in used and n[0] <= gs + 1.5]
+        if not cands:
+            cands = [n for n in notes if n[1] not in used and gs <= n[0] <= ge]
+        if not cands:
+            continue
+        ot, text = max(cands, key=lambda n: n[0]) if any(n[0] <= gs + 1.5 for n in cands) else min(cands, key=lambda n: n[0])
+        line = tts_line(text)
+        if line is None:
+            continue
+        start = int((gs + 0.5) * RATE)
+        if start + len(line) > int((ge - 0.3) * RATE):
+            continue  # does not fit this silence; never talk over the seller or the agent
+        for k, v in enumerate(line):
+            x = samples[start + k] + v
+            samples[start + k] = 32767 if x > 32767 else -32768 if x < -32768 else x
+        used.add(text)
+        placed += 1
+    return samples.tobytes(), placed
 
 
 def run(cmd):
@@ -113,6 +217,8 @@ def build_scene(r, sid, index):
                 recorded_until = e["t"] + (e.get("dur", now_dur) + 0.6) * 1000
                 if recorded_until - keep_until > 300:
                     drops.append((keep_until, recorded_until))
+    drops += [(e["from"], e["to"]) for e in ev if e["type"] == "drop"]
+    drops.sort()
     for da, db in drops:
         nxt = []
         for a, b, sp in cuts:
@@ -210,12 +316,16 @@ def build_scene(r, sid, index):
         if sp == 0:
             continue
         pcm += chunk if sp == 1.0 else b"\x00" * (int((e2 - s) / sp) // 2 * 2)
+    notes = [(out_time(e["t"]), e["text"]) for e in ev if e["type"] == "explain"]
+    filled, placed = fill_gaps(pcm, notes) if notes else (bytes(pcm), 0)
     cut = os.path.join(WORK, f"{index:02d}-{sid}-audio.wav")
     with wave.open(cut, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(RATE)
-        w.writeframes(bytes(pcm))
+        w.writeframes(filled)
+    if placed:
+        print(f"    {sid}: explained {placed} silent gap(s)")
 
     # Overlays: scene title for 4 s, "sped up" label, disclosure line.
     title = NARR.get(sid, {}).get("title", sid)
@@ -235,6 +345,27 @@ def build_scene(r, sid, index):
         "-vf", vf, "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", str(FPS),
         "-c:a", "aac", "-b:a", "192k", "-ar", str(RATE), "-ac", "2", "-t", f"{total:.3f}", clip,
     ])
+    # Shorten any silence still longer than MAX_SILENCE_S (page loads, long scrolls) to KEEP_SILENCE_S.
+    keep_gaps = silent_gaps(array.array("h", filled), MAX_SILENCE_S)
+    if keep_gaps:
+        keep, cursor_s = [], 0.0
+        for gs, ge in keep_gaps:
+            cut_a, cut_b = gs + KEEP_SILENCE_S / 2, ge - KEEP_SILENCE_S / 2
+            if cut_b - cut_a > 0.3:
+                keep.append((cursor_s, cut_a))
+                cursor_s = cut_b
+        keep.append((cursor_s, total))
+        keep = [(x, y) for x, y in keep if y - x > 0.05]
+        parts = []
+        for i, (x, y) in enumerate(keep):
+            parts.append(f"[0:v]trim=start={x:.3f}:end={y:.3f},setpts=PTS-STARTPTS[v{i}];[0:a]atrim=start={x:.3f}:end={y:.3f},asetpts=PTS-STARTPTS[a{i}]")
+        graph = ";".join(parts) + ";" + "".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[v][a]"
+        trimmed = clip.replace(".mp4", "-trim.mp4")
+        run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", clip, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+             "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", str(FPS), "-c:a", "aac", "-b:a", "192k", "-ar", str(RATE), "-ac", "2", trimmed])
+        os.replace(trimmed, clip)
+        total = sum(y - x for x, y in keep)
+        print(f"    {sid}: shortened {len(keep_gaps)} long silence(s)")
     print(f"  {sid}: {total:.1f}s from {os.path.basename(r.path)}")
     return clip
 

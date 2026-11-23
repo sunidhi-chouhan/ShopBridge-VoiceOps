@@ -24,6 +24,8 @@ import { useToast } from "../ui/Toast";
 
 type Kind = "ai" | "live" | "custom" | "demo";
 const FEATURES: { feature: string; api: string; kind: Kind }[] = [
+  { feature: "Multi-agent team: Supervisor + comms, inventory, triage agents", api: "Gemini planner (JSON) · handoffs logged · human approval", kind: "ai" },
+  { feature: "Reasoning engine: decision trace for every proposal", api: "Rules engine over policy · facts, checks, verdict, why", kind: "ai" },
   { feature: "Voice agent: orders, returns, stock, offers, batch delay notices, proactive briefing", api: "Gemini Live native audio · function calling · server-checked tools", kind: "ai" },
   { feature: "Support triage: summary, urgency, mood, suggested resolution", api: "Gemini Flash JSON · policy overrides the model", kind: "ai" },
   { feature: "Support reply drafts", api: "Gemini Flash · grounded in the order record", kind: "ai" },

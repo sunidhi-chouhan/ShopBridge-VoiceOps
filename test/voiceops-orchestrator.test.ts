@@ -229,6 +229,45 @@ describe("VoiceOps orchestrator (Postgres)", { skip: available ? false : PG_SKIP
     assert.ok(batch.every((m) => /Hi \S+, your order is running a day late/.test(m.text)));
   });
 
+  it("attaches a reasoning trace to proposals and blocks", async () => {
+    const ok: any = await ask("update_order_status", { order_no: no.o_delayed, status: "packed" });
+    if (ok.status === "awaiting_approval") assert.equal(ok.trace.verdict, "needs_approval");
+    const blocked: any = await ask("cancel_order", { order_no: no.o_shipped });
+    assert.equal(blocked.status, "blocked");
+    assert.equal(blocked.trace.verdict, "blocked");
+    assert.ok(blocked.trace.checks.some((c: any) => c.rule === "Not yet dispatched" && !c.passed));
+  });
+
+  it("runs the agent team: observe, plan, hand off, propose, rules decide, human approves", async () => {
+    const saved = process.env.GEMINI_API_KEY;
+    delete process.env.GEMINI_API_KEY; // exercise the rule-based fallbacks
+    try {
+      await sql(url, "UPDATE products SET stock = 2 WHERE id = 'p2'");
+      const team = await import("../server/agents/team");
+      const { runId } = await team.startTeamRun(seller, "dashboard", notifier);
+      let run: any;
+      for (let i = 0; i < 60; i++) {
+        run = (await team.listTeamRuns(seller)).find((r: any) => r.id === runId);
+        if (run.status !== "running") break;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.equal(run.status, "done");
+      const kinds = run.steps.map((s: any) => s.kind);
+      for (const k of ["observe", "plan", "handoff", "propose", "decide", "summary"]) assert.ok(kinds.includes(k), `has ${k}`);
+      const inv = run.steps.find((s: any) => s.kind === "decide" && s.trace?.tool === "adjust_stock");
+      assert.ok(inv, "inventory proposal reached the reasoning engine");
+      assert.equal(inv.trace.verdict, "needs_approval");
+      assert.equal(inv.approval_state, "pending");
+      assert.equal(await stock("p2"), 2, "nothing changes before approval");
+      assert.equal((await o.decideApproval(ctx, inv.approval_id, "approve", "tap")).status, "succeeded");
+      assert.equal(await stock("p2"), 10);
+      const plan = run.steps.find((s: any) => s.kind === "plan");
+      assert.match(plan.detail, /rules/);
+    } finally {
+      if (saved !== undefined) process.env.GEMINI_API_KEY = saved;
+    }
+  });
+
   it("prices time saved with measured manual runs, falling back to labelled assumptions", async () => {
     const before: any = (await o.overview(seller)).usage;
     assert.ok(before.baseline.every((b: any) => b.source === "assumed" && b.runs === 0));

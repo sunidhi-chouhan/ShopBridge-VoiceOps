@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import type { VoiceOverview } from "../api";
+import { startAgentRun, type VoiceOverview } from "../api";
 import { useSession } from "../app/session";
 import { Button } from "../ui/Button";
 import { navigate } from "../ui/route";
@@ -7,7 +7,7 @@ import { unitEconomics } from "./Economics";
 import { useVoice } from "./VoiceContext";
 
 type Data = VoiceOverview;
-type Tab = "agent" | "how" | "approvals" | "activity" | "overview";
+type Tab = "agent" | "team" | "how" | "approvals" | "activity" | "overview";
 
 const greeting = () => {
   const h = new Date().getHours();
@@ -44,6 +44,7 @@ export function DashHero({ data, onOpenTab }: { data: Data; onOpenTab: (t: Tab) 
               <span aria-hidden="true">🎙</span> Talk to the agent
             </Button>
           )}
+          <Button variant="secondary" onClick={() => { void startAgentRun().catch(() => undefined); onOpenTab("team"); }}>✦ Run the AI team</Button>
           <span className="dash-ai-pill"><span className="dash-live-dot" aria-hidden="true" /> Gemini Live · native audio</span>
         </div>
       </div>

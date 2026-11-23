@@ -293,6 +293,31 @@ export function draftListing(image: string, note: string): Promise<{ draft: List
   return request("/api/seller/products/draft", { method: "POST", body: JSON.stringify({ image, note }) });
 }
 
+// ---- Multi-agent team ----
+
+export type AgentStep = {
+  id: string;
+  seq: number;
+  agent: string;
+  to_agent: string | null;
+  kind: string;
+  title: string;
+  detail: string | null;
+  trace: import("./ai/TraceView").DecisionTrace | null;
+  approval_id: string | null;
+  approval_state: "pending" | "approved" | "rejected" | "expired" | "executed" | null;
+  approval_readback: string | null;
+  created_at: string;
+};
+export type AgentRun = { id: string; trigger: string; status: "running" | "done" | "failed"; summary: string | null; created_at: string; finished_at: string | null; steps: AgentStep[] };
+
+export function startAgentRun(): Promise<{ runId: string; reused: boolean }> {
+  return request("/api/voiceops/agents/run", { method: "POST", body: "{}" });
+}
+export function listAgentRuns(): Promise<{ runs: AgentRun[] }> {
+  return request("/api/voiceops/agents/runs");
+}
+
 // ---- Gemini smart replies ----
 
 export function suggestReplies(

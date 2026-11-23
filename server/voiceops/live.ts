@@ -54,6 +54,8 @@ BATCHES: To update many customers at once (for example "sab delayed customers ko
 
 OFFERS: For a discount or special price use make_offer with the new total in rupees. Deep discounts (over 50%) are blocked: offer request_human_review instead.
 
+TEAM: When the seller asks the team to look after the shop ("team ko check karne do", "full check karo"), call run_agent_team. Say in one sentence that the supervisor and specialist agents are working and their proposals will appear on the Agent network tab for approval.
+
 BRIEFING: When you get "[system] Session opened", call business_summary, then in one or two short sentences greet the seller and say what needs attention now (delayed orders, low stock, pending approvals, open returns). Suggest the single most useful next step, for example notifying delayed customers. Do not act until they answer.
 
 SUMMARIES: For "what's pending today" style requests call business_summary and list_orders (use delayed_only), then speak the top points and suggest one next action.
@@ -325,7 +327,9 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
         const result = await runAndReport(call.name, call.args ?? {}).catch((error) => ({
           ok: false, status: "failed", message: error instanceof Error ? error.message : "Tool failed.",
         }));
-        return { id: call.id, name: call.name, response: { output: result } };
+        // The model gets the verdict in one line; the full reasoning trace is for the seller's screen only.
+        const { trace, ...rest } = result as { trace?: { explanation?: string } } & Record<string, unknown>;
+        return { id: call.id, name: call.name, response: { output: trace?.explanation ? { ...rest, reasoning: trace.explanation } : rest } };
       };
       // Read-only lookups do not depend on each other. Writes stay in order so an approval is raised before it can be confirmed.
       const readsOnly = calls.length > 1 && calls.every((call) => orchestrator.READ_TOOL_NAMES.has(call.name));

@@ -124,6 +124,13 @@ async function openPage(name) {
     },
   };
   handlers.set(sessionId, (method, params) => {
+    if (method === "Runtime.consoleAPICalled" || method === "Runtime.exceptionThrown") {
+      const text = method === "Runtime.exceptionThrown"
+        ? `EXCEPTION ${params.exceptionDetails?.exception?.description ?? params.exceptionDetails?.text}`
+        : `${params.type} ${params.args.map((a) => a.value ?? a.description ?? "").join(" ")}`;
+      appendFileSync(path.join(OUT, `console-${name}.log`), `${new Date().toISOString()} ${text}\n`);
+      return;
+    }
     if (method === "Runtime.bindingCalled" && params.name === "__sendAudio") {
       const { id, start, b64 } = JSON.parse(params.payload);
       const file = `agent-${name}-${id}.webm`;
@@ -191,10 +198,28 @@ async function typeInto(page, selector, text) {
   await page.eval(`const el=document.querySelector(${J(selector)}); el.scrollIntoView({block:"center"}); el.focus();`);
   await page.send("Input.insertText", { text });
 }
-async function say(page, id) {
+async function playClip(page, id) {
   const r = JSON.parse(await page.eval(`return JSON.stringify(await window.__say(${J(voice(id))}));`));
   log("say", { page: page.name, id, t0: r.t, dur: r.dur });
   await sleep(r.dur * 1000 + 300);
+}
+const userTurns = (page) => page.eval(`return document.querySelectorAll('.vo-turn.is-user').length;`);
+/**
+ * Play one of the seller's clips and make sure the agent heard it (a new "You" line). Gemini Live occasionally
+ * stops taking audio; then the clip is replayed, and as a last resort the session is restarted. Every failed
+ * attempt is marked as a drop, so the edit only shows the take that worked.
+ */
+async function say(page, id) {
+  // One voice session for the whole video: never restart it here (the demo allows 40 sessions per device per day).
+  // If the agent did not hear the clip, replay it once; the failed attempt is cut from the edit.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const before = await userTurns(page);
+    const from = now();
+    await playClip(page, id);
+    if (await waitFor(page, `document.querySelectorAll('.vo-turn.is-user').length > ${before}`, 8000, `agent heard ${id}`)) return true;
+    log("drop", { from, to: now(), why: `not heard: ${id}` });
+  }
+  return false;
 }
 const readbacks = (page) => page.eval(`return document.querySelectorAll('.vo-readback').length;`);
 async function waitNewReadback(page, before, timeout = 35000) {
@@ -238,6 +263,8 @@ async function voiceTab(page, label) {
 // ---------------------------------------------------------------------------
 let camera = "seller";
 const setCamera = (name) => { if (camera !== name) { camera = name; log("camera", { name }); } };
+/** What is on screen from this moment: spoken in the edit if a silence of more than 5 s follows. */
+const explain = (text) => log("explain", { text });
 const fast = async (fn) => { log("fast_start"); try { return await fn(); } finally { log("fast_end"); } };
 async function hold(id) {
   const s = narr.scenes.find((x) => x.id === id);
@@ -257,6 +284,7 @@ scene("s01_landing", async () => {
   await hold("s01_landing");
   await click(seller, "a.hall-how", null);
   await sleep(1500);
+  explain("This explainer follows one Hinglish sentence through the AI: hearing it, deciding, the guardrails, the read-back, and the audit log.");
   for (let i = 0; i < 7; i++) { await smoothScroll(seller, null, 700, 1600); await sleep(900); }
   await sleep(1500);
 });
@@ -272,6 +300,7 @@ scene("s02_seller", async () => {
 scene("s03_briefing", async () => {
   await hold("s03_briefing");
   await click(seller, "button", "Start talking");
+  explain("The voice session is opening. The agent checks the shop first, so its first words are a briefing.");
   await waitFor(seller, `document.querySelector('.vo-turn.is-agent')`, 30000, "briefing");
   await waitAgentIdle(seller, 40000);
   await sleep(1000);
@@ -281,9 +310,11 @@ scene("s04_batch", async () => {
   await hold("s04_batch");
   const n = await readbacks(seller);
   await say(seller, "02_batch");
+  explain("On the right, each tool call appears with its timing. The approval card holds the whole batch until Meera says yes.");
   await waitNewReadback(seller, n);
   await waitAgentIdle(seller);
   await say(seller, "03_yes_bhejdo");
+  explain("Approved by voice. The server now sends one personalised message to each delayed customer.");
   await waitFor(seller, `/Delay update sent/.test(document.body.innerText)`, 30000, "batch sent");
   await waitAgentIdle(seller);
   await sleep(2000);
@@ -294,14 +325,17 @@ scene("s05_interrupt", async () => {
   const n = await readbacks(seller);
   const turnsBefore = await seller.eval(`return document.querySelectorAll('.vo-turn.is-agent').length;`);
   await say(seller, "04_cancel_1050");
+  explain("The cancel tool is blocked by the server, because this parcel has already left.");
   // Wait until the agent is explaining (a new agent line is being spoken), then cut in.
   await waitFor(seller, `document.querySelectorAll('.vo-turn.is-agent').length > ${turnsBefore} && /ship|dispatch|bhej|already|nahi|cancel/i.test([...document.querySelectorAll('.vo-turn.is-agent')].pop().textContent)`, 25000, "agent explaining");
   await sleep(1400);
   await say(seller, "05_interrupt");
+  explain("The agent stopped mid-sentence and is drafting a delay message, which waits for approval.");
   await waitNewReadback(seller, n);
   await waitAgentIdle(seller);
   await click(seller, ".vo-card button, .vo-timeline button, button", "Approve");
   await waitFor(seller, `/Message sent to/.test(document.body.innerText)`, 20000, "message sent");
+  explain("Approved with a tap this time. The message goes into the buyer's order chat. The order itself stays shipped.");
   await sleep(3500);
 });
 
@@ -309,6 +343,7 @@ scene("s06_noise", async () => {
   await hold("s06_noise");
   const n = await readbacks(seller);
   await say(seller, "06_noisy_correction");
+  explain("Despite the noise, the agent keeps only the corrected order, ten fifty-three, with the courier and tracking number.");
   await waitNewReadback(seller, n);
   await waitAgentIdle(seller);
   await say(seller, "07_haan");
@@ -321,9 +356,11 @@ scene("s07_return", async () => {
   await hold("s07_return");
   const n = await readbacks(seller);
   await say(seller, "08_return_1042");
+  explain("The agent checks the order and the seven-day return window before proposing the return.");
   await waitNewReadback(seller, n);
   await waitAgentIdle(seller);
   await say(seller, "09_haan_kardo");
+  explain("The return is recorded with the refund on hold. Next, a single tap on Undo reverses it.");
   await waitFor(seller, `/Return started/.test(document.body.innerText)`, 25000, "return started");
   await waitAgentIdle(seller);
   // Undo exactly the return (never another card).
@@ -339,10 +376,12 @@ scene("s07_return", async () => {
 scene("s08_human", async () => {
   await hold("s08_human");
   await say(seller, "10_return_1054");
+  explain("Blocked by the seven-day rule. Instead of bending the policy, the agent offers to involve a person.");
   await waitFor(seller, `/RETURN_WINDOW|window|7-day|seven/i.test(document.body.innerText)`, 25000, "blocked");
   await waitAgentIdle(seller);
   const n = await readbacks(seller);
   await say(seller, "11_human");
+  explain("The case is flagged for human review, and the audit log marks where a person stepped in.");
   if (await waitNewReadback(seller, n, 25000)) {
     await waitAgentIdle(seller);
     await click(seller, "button", "Approve");
@@ -354,18 +393,27 @@ scene("s09_offer", async () => {
   await hold("s09_offer");
   const n = await readbacks(seller);
   await say(seller, "12_offer_1055");
-  await waitNewReadback(seller, n);
+  explain("The agent looked up the order, worked out ten percent off, and reads back the new price before posting the offer card.");
+  // The agent sometimes confirms the amount in words first; answer "haan" until the offer card appears.
+  for (let i = 0; i < 2 && !(await waitNewReadback(seller, n, 20000)); i++) {
+    await waitAgentIdle(seller);
+    await say(seller, "07_haan");
+  }
   await waitAgentIdle(seller);
   await say(seller, "07_haan");
-  await waitFor(seller, `/Offer of INR/.test(document.body.innerText)`, 25000, "offer sent");
+  if (!(await waitFor(seller, `/Offer of INR/.test(document.body.innerText)`, 20000, "offer sent"))) {
+    await click(seller, "button", "Approve", { required: false });
+    await waitFor(seller, `/Offer of INR/.test(document.body.innerText)`, 20000, "offer sent (tap)");
+  }
   await waitAgentIdle(seller);
   await sleep(1500);
-});
+}, () => ensureLive(seller));
 
 scene("s09b_tamil", async () => {
   await hold("s09b_tamil");
   const n = await readbacks(seller);
   await say(seller, "13_tamil");
+  explain("The read-back shows the customer message drafted in Tamil script, ready for approval.");
   await waitNewReadback(seller, n);
   await waitAgentIdle(seller);
   await say(seller, "07_haan");
@@ -382,6 +430,7 @@ scene("s10_buyer", async () => {
   await sleep(4000);
   setCamera("buyer");
   await hold("s10_buyer");
+  explain("This is the buyer's own screen: the seller's English message, shown in Hindi, with the original one tap away.");
   await smoothScroll(buyer, null, 400, 1500);
   await sleep(2500);
 });
@@ -392,6 +441,7 @@ scene("s11_replies", async () => {
   await sleep(4000);
   setCamera("buyer");
   await hold("s11_replies");
+  explain("The buyer types a question in Hindi, asking when the return pickup will be.");
   await typeInto(buyer, ".ix-composer textarea, .ix-composer input[type=text]", "नमस्ते, रिटर्न का पिकअप कब होगा?");
   await sleep(800);
   await buyer.eval(`document.querySelector('.ix-composer').requestSubmit();`);
@@ -399,6 +449,7 @@ scene("s11_replies", async () => {
   setCamera("seller");
   await goto(seller, "#/inbox");
   await click(seller, "button, a, li", "Block-print kantha throw");
+  explain("On the seller's side, Gemini reads the conversation and writes three suggested replies above the message box.");
   await fast(() => waitFor(seller, `[...document.querySelectorAll('.ix-quick .ai')].some(e=>/Gemini/.test(e.textContent))`, 90000, "Gemini chips"));
   await sleep(2500);
   await click(seller, ".ix-quick button", null);
@@ -414,6 +465,7 @@ scene("s12_support", async () => {
   await signIn(seller, "support");
   await goto(seller, "#/queue");
   await sleep(1000);
+  explain("Gemini is reading each open case and ranking the queue by urgency.");
   await fast(() => waitFor(seller, `document.querySelector('.queue-ai')`, 180000, "queue triage"));
   await hold("s12_support");
   await click(seller, ".queue-button", null);
@@ -421,9 +473,11 @@ scene("s12_support", async () => {
   if (!(await click(seller, "button", "Claim and join conversation", { required: false }))) await click(seller, "button", "Open conversation");
   await sleep(4000);
   if (!(await seller.eval(`return Boolean(document.querySelector('.case-brief'));`))) await click(seller, 'button[aria-label="Order details"]', null);
+  explain("Inside the case, Gemini triages again using the live conversation: the issue, the buyer's mood, and a suggested resolution.");
   await fast(() => waitFor(seller, `document.querySelector('.case-brief .triage-summary')`, 180000, "case triage"));
   await sleep(3000);
   await click(seller, "button", "Use this proposal");
+  explain("One click puts Gemini's suggestion into the proposal form. The support agent still reviews it and presses Propose.");
   await sleep(2500);
   await click(seller, ".ix-form button.primary", "Propose");
   await sleep(3500);
@@ -440,6 +494,7 @@ scene("s13_listing", async () => {
   await typeInto(seller, "#pnote", "hand stitched from old cotton saris, two layers");
   await sleep(600);
   await click(seller, "button", "Draft with Gemini");
+  explain("Gemini looks at the photo and the seller's note, then fills in the name, description, category and a suggested price.");
   await fast(() => waitFor(seller, `document.getElementById('pname')?.value`, 90000, "listing draft"));
   await smoothScroll(seller, null, 500, 1200);
   await sleep(4000);
@@ -451,8 +506,10 @@ scene("s14_proof", async () => {
   await goto(seller, "#/voice");
   await voiceTab(seller, "Overview");
   await hold("s14_proof");
+  explain("The dashboard shows what needs attention, the reply time for every voice turn, how each action ended, and the business case.");
   for (let i = 0; i < 5; i++) { await smoothScroll(seller, null, 650, 1800); await sleep(1500); }
   await click(seller, "button", "Run check");
+  explain("The pre-demo check tests the database, the chat service, and every Gemini key in the rotation.");
   await fast(() => waitFor(seller, `/Gemini key rotation/.test(document.body.innerText)`, 60000, "preflight"));
   await sleep(3500);
 });
@@ -480,7 +537,7 @@ await goto(buyer, "");
 if (RESET) {
   console.log("Resetting demo data…");
   await signIn(seller, "seller");
-  const shared = await seller.eval(`const r=await fetch("/api/demo/reset",{method:"POST",headers:{"Content-Type":"application/json","x-shopbridge-intent":"reset-demo"},body:"{}"}); return r.status;`);
+  const shared = await seller.eval(`const r=await fetch("/api/demo/reset",{method:"POST",headers:{"Content-Type":"application/json","x-shopbridge-intent":"reset-demo"},body:JSON.stringify({confirm:"RESET"})}); return r.status;`);
   await sleep(4000);
   await signIn(seller, "seller");
   const voiceReset = await seller.eval(`const r=await fetch("/api/voiceops/demo/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); return r.status + " " + (await r.text()).slice(0,160);`);
