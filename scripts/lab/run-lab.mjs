@@ -26,11 +26,23 @@ const OUT = arg("--out", "docs/voiceops/lab");
 const CONDITIONS = arg("--conditions", "clean,snr10,snr5,snr0").split(",").map((s) => s.trim()).filter(Boolean);
 const REPEAT = Math.max(1, Number(arg("--repeat", "1")));
 const REAL_ONLY = flag("--real-only");
+/** Hold-to-talk: the lab marks the start and end of each utterance itself, like a seller holding the talk button. */
+const PTT = flag("--ptt");
 const only = arg("--only") ? new Set(arg("--only").split(",")) : flag("--must-have") ? new Set(MUST_HAVE) : null;
 const CACHE = "lab-cache";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** A private (IAM-protected) Cloud Run lab service needs a Google identity token: LAB_ID_TOKEN=$(gcloud auth print-identity-token). */
-const AUTH = process.env.LAB_ID_TOKEN ? { Authorization: `Bearer ${process.env.LAB_ID_TOKEN}` } : {};
+// LAB_AUTH=gcloud fetches a fresh token (tokens last an hour) every 30 minutes from the signed-in gcloud.
+let token = process.env.LAB_ID_TOKEN ?? null;
+let tokenAt = Date.now();
+const refreshToken = () => {
+  if (process.env.LAB_AUTH !== "gcloud") return;
+  if (token && Date.now() - tokenAt < 30 * 60_000) return;
+  token = execFileSync(process.env.GCLOUD_BIN || "gcloud", ["auth", "print-identity-token"]).toString().trim();
+  tokenAt = Date.now();
+};
+refreshToken();
+const auth = () => { refreshToken(); return token ? { Authorization: `Bearer ${token}` } : {}; };
 
 // ---- safety: never against the public demo
 const host = new URL(BASE).hostname;
@@ -55,6 +67,16 @@ function activeRms(pcm) {
   const peak = Math.max(...levels, 1);
   const act = levels.filter((l) => l > peak * 0.1);
   return Math.sqrt(act.reduce((a, l) => a + l * l, 0) / Math.max(act.length, 1));
+}
+/** Byte offset just after the last voiced 30 ms frame (stricter than trim, so room tone does not count as speech). */
+function voicedEnd(pcm) {
+  const frame = 480 * 2;
+  const levels = [];
+  for (let i = 0; i + frame <= pcm.length; i += frame) levels.push(rms(pcm.subarray(i, i + frame)));
+  const peak = Math.max(...levels, 1);
+  let last = levels.length - 1;
+  while (last > 0 && levels[last] < Math.max(500, peak * 0.12)) last--;
+  return Math.min(pcm.length, (last + 1) * frame);
 }
 function decode(file) {
   return execFileSync("ffmpeg", ["-v", "error", "-i", file, "-ac", "1", "-ar", String(SR), "-f", "s16le", "-"], { maxBuffer: 1 << 28 });
@@ -160,14 +182,25 @@ function withNoise(speech, snr, tailSamples, k) {
 class Session {
   constructor(cookie) {
     this.events = []; this.frames = []; this.sent = 0; this.recvBytes = 0;
-    this.ws = new WebSocket(BASE.replace(/^http/, "ws") + "/api/voiceops/live", { headers: { cookie, origin: BASE, ...AUTH } });
+    this.ws = new WebSocket(BASE.replace(/^http/, "ws") + "/api/voiceops/live" + (PTT ? "?mode=ptt" : ""), { headers: { cookie, origin: BASE, ...auth() } });
     this.ws.on("message", (d, bin) => {
       if (bin) { this.frames.push(Date.now()); this.recvBytes += d.length; return; }
       const e = JSON.parse(d.toString()); e.at = Date.now(); this.events.push(e);
     });
   }
   async ready() { for (let i = 0; i < 300; i++) { const e = this.events.find((x) => x.type === "ready" || x.type === "error"); if (e) return e; await sleep(50); } return null; }
-  async stream(pcm) { for (let i = 0; i < pcm.length; i += 3200) { if (this.ws.readyState !== WebSocket.OPEN) return; this.ws.send(pcm.subarray(i, Math.min(i + 3200, pcm.length)), { binary: true }); this.sent += Math.min(3200, pcm.length - i); await sleep(100); } }
+  /** Stream at real-time pace; returns when the chunk holding byte `mark` was sent (or the end). */
+  async stream(pcm, mark = pcm.length) {
+    let markedAt = null;
+    for (let i = 0; i < pcm.length; i += 3200) {
+      if (this.ws.readyState !== WebSocket.OPEN) break;
+      this.ws.send(pcm.subarray(i, Math.min(i + 3200, pcm.length)), { binary: true });
+      this.sent += Math.min(3200, pcm.length - i);
+      if (markedAt === null && i + 3200 >= mark) markedAt = Date.now() - Math.round(((i + 3200 - mark) / 3200) * 100);
+      await sleep(100);
+    }
+    return markedAt ?? Date.now();
+  }
   async settle(quiet = 4000, max = 45000) {
     const end = Date.now() + max;
     while (Date.now() < end) { const last = Math.max(this.frames.at(-1) ?? 0, this.events.at(-1)?.at ?? 0); if (Date.now() - last > quiet) return; await sleep(200); }
@@ -182,13 +215,30 @@ async function speak(s, clip, cond, k) {
   let speech = clip.pcm, tail = Buffer.alloc(tailSamples * 2), noise = null;
   const snr = cond.startsWith("snr") ? Number(cond.slice(3)) : null;
   if (snr !== null) ({ speech, tail, noise } = withNoise(clip.pcm, snr, tailSamples, k));
-  await s.stream(speech);
-  const end = Date.now();
+  const start = Date.now();
+  if (PTT) s.ws.send(JSON.stringify({ type: "activity_start" }));
+  // "end" = when the seller's last voiced sound left the client (measured on the clean clip).
+  const end = await s.stream(speech, voicedEnd(clip.pcm));
+  if (PTT) s.ws.send(JSON.stringify({ type: "activity_end" }));
   await s.stream(tail);
-  return { end, noise };
+  return { start, end, noise };
 }
 
-function collect(s, from, speechEnd) {
+/**
+ * Reply latency: the first agent audio that starts after the seller stopped (after a gap of 250 ms+ with no
+ * audio), so audio the agent was already playing does not count. Audio during the clip = talked over the seller.
+ */
+function replyLatency(frames, start, end) {
+  const talkedOver = frames.some((f) => f > start + 300 && f < end);
+  let prev = frames.filter((f) => f < end).at(-1) ?? 0;
+  for (const f of frames.filter((x) => x >= end)) {
+    if (f - prev > 250) return { latency: f - end, talkedOver };
+    prev = f;
+  }
+  return { latency: null, talkedOver };
+}
+
+function collect(s, from, speechEnd, speechStart) {
   const ev = s.events.slice(from);
   const calls = [];
   for (const e of ev) {
@@ -198,7 +248,7 @@ function collect(s, from, speechEnd) {
       if (c) { c.status = e.result?.status; c.code = e.result?.code ?? null; c.readback = e.result?.approval?.readback ?? null; }
     }
   }
-  const firstFrame = s.frames.find((f) => f >= speechEnd);
+  const { latency, talkedOver } = replyLatency(s.frames, speechStart, speechEnd);
   const heard = ev.filter((e) => e.type === "transcript" && e.role === "user").map((e) => e.text).at(-1) ?? "";
   const said = ev.filter((e) => e.type === "transcript" && e.role === "agent").map((e) => e.text).at(-1) ?? "";
   return {
@@ -207,16 +257,17 @@ function collect(s, from, speechEnd) {
     resolved: ev.filter((e) => e.type === "approval_resolved"),
     interrupted: ev.some((e) => e.type === "interrupted"),
     transcript: heard, reply: said,
-    latency_ms: firstFrame ? firstFrame - speechEnd : null,
+    latency_ms: latency,
+    talked_over: talkedOver,
     server_latency_ms: ev.filter((e) => e.type === "latency").map((e) => e.ms),
   };
 }
 
 // ---------------------------------------------------------------- run
-const login = await fetch(`${BASE}/api/demo`, { method: "POST", headers: { "Content-Type": "application/json", ...AUTH }, body: JSON.stringify({ account: "seller" }) });
+const login = await fetch(`${BASE}/api/demo`, { method: "POST", headers: { "Content-Type": "application/json", ...auth() }, body: JSON.stringify({ account: "seller" }) });
 const cookie = (login.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]).join("; ");
 if (!login.ok || !cookie) { console.error(`Sign-in failed (${login.status}).`); process.exit(1); }
-const post = (p) => fetch(BASE + p, { method: "POST", headers: { "Content-Type": "application/json", cookie, origin: BASE, ...AUTH }, body: "{}" });
+const post = (p) => fetch(BASE + p, { method: "POST", headers: { "Content-Type": "application/json", cookie, origin: BASE, ...auth() }, body: "{}" });
 const byId = new Map(CASES.map((c) => [c.id, c]));
 
 const results = [];
@@ -249,13 +300,15 @@ for (const cond of CONDITIONS) {
           }
         }
         const from = s.events.length;
-        const { end, noise } = await speak(s, main, cond === "live" ? "clean" : cond, k);
+        const { start, end, noise } = await speak(s, main, cond === "live" ? "clean" : cond, k);
         await s.settle(4000, 45000);
-        const r = collect(s, from, end);
+        const r = collect(s, from, end, start);
         const verdict = c.check(r);
         // A failure is "safe" when the agent proposed and executed nothing (it asked, refused or looked something up).
-        const acted = r.approvals.length > 0 || r.resolved.some((x) => x.result?.status === "succeeded" && x.name === "confirm_action");
-        Object.assign(r0, r, { noise, pass: verdict.pass, outcome: verdict.pass ? "pass" : acted ? "wrong_action" : "safe_fail", expect: verdict.why });
+        // Failures: "wrong_execution" changed data, "wrong_proposal" only raised an approval (nothing changed), "safe_fail" did neither.
+        const executedAny = r.resolved.some((x) => x.result?.status === "succeeded" && x.name === "confirm_action");
+        const proposedAny = r.approvals.length > 0;
+        Object.assign(r0, r, { noise, ptt: PTT, pass: verdict.pass, outcome: verdict.pass ? "pass" : executedAny ? "wrong_execution" : proposedAny ? "wrong_proposal" : "safe_fail", expect: verdict.why });
       } catch (error) {
         Object.assign(r0, { pass: false, error: error instanceof Error ? error.message : String(error) });
       }
@@ -270,7 +323,7 @@ for (const cond of CONDITIONS) {
 
 mkdirSync(OUT, { recursive: true });
 const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const meta = { base: BASE, at: new Date().toISOString(), conditions: CONDITIONS, repeat: REPEAT, noise: noiseBeds.length ? noiseBeds.map((b) => b.name) : ["synthetic godown mix"], clips_dir: CLIPS };
+const meta = { base: BASE, at: new Date().toISOString(), mode: PTT ? "hold-to-talk" : "automatic turn detection", conditions: CONDITIONS, repeat: REPEAT, noise: noiseBeds.length ? noiseBeds.map((b) => b.name) : ["synthetic godown mix"], clips_dir: CLIPS };
 const file = path.join(OUT, `run-${stamp}.json`);
 writeFileSync(file, JSON.stringify({ meta, results }, null, 2));
 console.log(`\nSaved ${file}. Build the report with: node scripts/lab/report.mjs ${file}`);

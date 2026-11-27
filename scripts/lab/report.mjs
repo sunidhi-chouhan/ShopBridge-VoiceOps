@@ -29,6 +29,7 @@ const sources = group((r) => r.source);
 
 const lines = [];
 lines.push("# Validation lab results", "");
+lines.push(`Mode: ${[...new Set(runs.map((r) => r.meta.mode ?? "automatic turn detection"))].join(", ")}.`, "");
 lines.push(`Generated ${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC from ${files.length} run(s) against ${[...new Set(runs.map((r) => r.meta.base))].join(", ")}.`, "");
 lines.push(`Speech: ${[...sources].map(([k, v]) => `${v.length} ${k}`).join(", ")}${skipped.length ? `; ${skipped.length} skipped (no recording)` : ""}. Noise beds: ${[...new Set(runs.flatMap((r) => r.meta.noise))].join(", ")}.`, "");
 lines.push("Latency = last speech sample sent → first agent audio received by the client. It includes end-of-speech detection, Gemini, tool calls and the network, measured from the machine running the lab.", "");
@@ -41,9 +42,12 @@ for (const [k, v] of group((r) => r.cond)) {
 const allLat = rows.map((r) => r.latency_ms).filter((x) => x !== null && x !== undefined);
 lines.push(`| **All** | **${rate(rows)}** | **${ms(pct(allLat, 50))}** | **${ms(pct(allLat, 95))}** | ${allLat.length} |`, "");
 const sub = allLat.filter((x) => x < 1000).length;
-const wrong = rows.filter((r) => r.outcome === "wrong_action" || (!r.pass && !r.outcome && !r.error));
+const executedWrong = rows.filter((r) => r.outcome === "wrong_execution");
+const proposedWrong = rows.filter((r) => r.outcome === "wrong_proposal" || r.outcome === "wrong_action");
 const safeFails = rows.filter((r) => r.outcome === "safe_fail");
-lines.push(`**Wrong actions: ${wrong.length} of ${rows.length}.** ${safeFails.length} other failure(s) were safe: the agent asked to repeat or looked something up and proposed nothing.`, "");
+const talked = rows.filter((r) => r.talked_over);
+lines.push(`**Wrong changes executed: ${executedWrong.length} of ${rows.length}.** Wrong proposals stopped at the approval step: ${proposedWrong.length}. Safe failures (asked to repeat, looked something up, proposed nothing): ${safeFails.length}.`, "");
+lines.push(`Agent started talking before the seller finished: ${talked.length} of ${rows.length} turns${talked.length ? ` (${[...new Set(talked.map((r) => COND[r.cond] ?? r.cond))].join(", ")})` : ""}.`, "");
 lines.push(`${sub} of ${allLat.length} turns (${allLat.length ? Math.round((100 * sub) / allLat.length) : 0}%) answered in under one second.`, "");
 
 lines.push("## By capability", "", "| Capability | Pass |", "|---|---|");
@@ -77,7 +81,7 @@ const fails = rows.filter((r) => !r.pass);
 if (fails.length) {
   lines.push("", "## Failures in detail", "");
   for (const r of fails) {
-    lines.push(`- **${r.id} (${COND[r.cond] ?? r.cond})** [${r.outcome === "wrong_action" ? "WRONG ACTION" : r.outcome === "safe_fail" ? "safe" : "error"}]: expected ${r.expect ?? "-"}. Tools: ${(r.calls ?? []).map((c) => `${c.name}(${JSON.stringify(c.args)}) → ${c.status}${c.code ? ` ${c.code}` : ""}`).join("; ") || "none"}. Agent said: "${(r.reply ?? "").slice(0, 160)}"${r.error ? ` Error: ${r.error}` : ""}`);
+    lines.push(`- **${r.id} (${COND[r.cond] ?? r.cond})** [${r.outcome === "wrong_execution" ? "WRONG CHANGE EXECUTED" : r.outcome === "wrong_proposal" || r.outcome === "wrong_action" ? "wrong proposal, not executed" : r.outcome === "safe_fail" ? "safe" : "error"}]${r.talked_over ? " [talked over the seller]" : ""}: expected ${r.expect ?? "-"}. Tools: ${(r.calls ?? []).map((c) => `${c.name}(${JSON.stringify(c.args)}) → ${c.status}${c.code ? ` ${c.code}` : ""}`).join("; ") || "none"}. Agent said: "${(r.reply ?? "").slice(0, 160)}"${r.error ? ` Error: ${r.error}` : ""}`);
   }
 }
 writeFileSync(out, lines.join("\n") + "\n");

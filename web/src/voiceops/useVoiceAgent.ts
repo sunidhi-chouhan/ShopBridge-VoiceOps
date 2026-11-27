@@ -27,6 +27,11 @@ export function useVoiceAgent(onDataChanged: () => void) {
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [error, setError] = useState<string | null>(null);
   const [micOn, setMicOn] = useState(false);
+  // Noisy-shop mode, remembered per device (a convenience only; it is safe if storage is unavailable).
+  const [holdToTalk, setHoldToTalkState] = useState<boolean>(() => {
+    try { return localStorage.getItem("voiceops.holdToTalk") === "1"; } catch { return false; }
+  });
+  const [holding, setHolding] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [latencies, setLatencies] = useState<number[]>([]);
@@ -116,7 +121,7 @@ export function useVoiceAgent(onDataChanged: () => void) {
     firstCommand.current = command ?? null;
     setError(null);
     setStatus("connecting");
-    const live = new LiveClient(handle);
+    const live = new LiveClient(handle, holdToTalk);
     client.current = live;
     try {
       await live.connect();
@@ -132,7 +137,7 @@ export function useVoiceAgent(onDataChanged: () => void) {
         setStatus("error");
       }
     }
-  }, [handle]);
+  }, [handle, holdToTalk]);
 
   const stop = useCallback(() => {
     client.current?.close();
@@ -163,6 +168,15 @@ export function useVoiceAgent(onDataChanged: () => void) {
   return {
     status, error, micOn, turns, timeline, latencies, model, client,
     start, stop, toggleMic,
+    holdToTalk, holding,
+    /** Switch noisy-shop mode; a running session restarts in the new mode. */
+    setHoldToTalk: (on: boolean) => {
+      setHoldToTalkState(on);
+      try { localStorage.setItem("voiceops.holdToTalk", on ? "1" : "0"); } catch { /* storage unavailable */ }
+      if (client.current) { client.current.close(); client.current = null; setStatus("idle"); setMicOn(false); }
+    },
+    holdStart: () => { client.current?.holdStart(); setHolding(true); },
+    holdEnd: () => { client.current?.holdEnd(); setHolding(false); },
     sendText: (text: string) => client.current?.sendText(text),
     /** Send a request to the agent, opening a session first if none is running. */
     ask: (text: string) => (client.current?.open ? client.current.sendText(text) : void start(text)),

@@ -42,3 +42,13 @@ describe("misheard order numbers", () => {
     assert.deepEqual(nearOrderNumbers(1050, [1050]), [], "an exact match is not a near miss");
   });
 });
+
+describe("client address behind proxies", () => {
+  it("uses the last X-Forwarded-For hop on Cloud Run and the first elsewhere", async () => {
+    const { clientKey } = await import("../server/auth");
+    const req = { headers: { "x-forwarded-for": "6.6.6.6, 49.36.1.2" }, socket: { remoteAddress: "10.0.0.1" } } as any;
+    assert.equal(clientKey(req, { K_SERVICE: "shopbridge" } as any), "49.36.1.2", "a forged first hop is ignored on Cloud Run");
+    assert.equal(clientKey(req, {} as any), "6.6.6.6");
+    assert.equal(clientKey({ headers: {}, socket: { remoteAddress: "10.0.0.1" } } as any, {} as any), "10.0.0.1");
+  });
+});

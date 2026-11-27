@@ -16,6 +16,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { UserRecord } from "../store-types";
 import * as orchestrator from "./orchestrator";
 import { getPool } from "../db/pool";
+import { clientKey } from "../auth";
 import { failureFromClose, keyRotation, markKeyFailed, markKeyOk } from "../gemini-keys";
 import { vertexAccessToken, vertexConfigured, vertexHost, vertexLocation, vertexProject } from "../vertex";
 
@@ -90,7 +91,9 @@ export async function catalogueNote(sellerId: string): Promise<string> {
  * mid-sentence). Unset keeps Gemini's default.
  */
 function vadConfig(): Record<string, unknown> {
-  const silence = process.env.GEMINI_VAD_SILENCE_MS ? Number(process.env.GEMINI_VAD_SILENCE_MS) : 300; // 300 ms measured best
+  // 600 ms: with real recorded speech, 300 ms ended the turn inside natural pauses ("1042... matlab 1052"),
+  // so corrections failed; 600 ms fixed them in the validation lab (docs/voiceops/VALIDATION.md).
+  const silence = process.env.GEMINI_VAD_SILENCE_MS ? Number(process.env.GEMINI_VAD_SILENCE_MS) : 600;
   const cfg: Record<string, unknown> = { endOfSpeechSensitivity: "END_SENSITIVITY_HIGH", startOfSpeechSensitivity: "START_SENSITIVITY_HIGH" };
   if (Number.isFinite(silence) && silence > 0) cfg.silenceDurationMs = Math.round(silence);
   return cfg;
@@ -189,8 +192,8 @@ function setupModel(a: LiveAttempt): string {
 
 const dayKey = () => new Date().toISOString().slice(0, 10);
 const ipCounts = new Map<string, { day: string; n: number }>();
-const clientIp = (req: IncomingMessage): string =>
-  String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "unknown").split(",")[0].trim();
+/** Same client address as the HTTP rate limits (forgery-proof on Cloud Run). */
+const clientIp = (req: IncomingMessage): string => clientKey(req);
 
 /**
  * Spend protection for a public demo. Limits (all env-tunable): concurrent live sessions across the
@@ -227,6 +230,11 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
   active.get(user.id)?.close(4000, "replaced");
   active.set(user.id, browser);
 
+  // Hold-to-talk ("?mode=ptt"): the seller marks each utterance with a button, so a TV or market chatter in
+  // the background can neither start a turn nor cut the agent off. Default: Gemini's automatic detection.
+  const holdToTalk = new URL(request.url || "/", "http://local").searchParams.get("mode") === "ptt";
+  let holding = false;
+  let turnOpened = false; // Gemini closes the session on an empty turn, so a turn opens only with real audio
   const sessionId = await orchestrator.startSession(user);
   const catalogue = await catalogueNote(user.id);
   const ctx: orchestrator.Ctx = { user, sessionId, notifier: deps.notifier };
@@ -282,7 +290,7 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
         setup: {
           model: setupModel(attempts[attempt]),
           generationConfig: { responseModalities: ["AUDIO"] },
-          realtimeInputConfig: { automaticActivityDetection: vadConfig() },
+          realtimeInputConfig: holdToTalk ? { automaticActivityDetection: { disabled: true } } : { automaticActivityDetection: vadConfig() },
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT(user.name) + catalogue }] },
           tools: [{ functionDeclarations: orchestrator.toolDeclarations }],
           inputAudioTranscription: {},
@@ -326,7 +334,7 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
       ready = true;
       if (attempts[attempt].kind === "key") markKeyOk(attempts[attempt].key);
       for (const q of queue.splice(0)) g.send(q);
-      sendJson(browser, { type: "ready", sessionId, model });
+      sendJson(browser, { type: "ready", sessionId, model, mode: holdToTalk ? "ptt" : "auto" });
       return;
     }
     if (msg.usageMetadata?.totalTokenCount) tokens = Math.max(tokens, Number(msg.usageMetadata.totalTokenCount));
@@ -421,6 +429,11 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
     try {
       if (isBinary) {
         const pcm = data as Buffer;
+        if (holdToTalk && !holding) return; // hold-to-talk: audio outside a held turn is never sent
+        if (holdToTalk && !turnOpened) {
+          turnOpened = true;
+          toGemini({ realtimeInput: { activityStart: {} } });
+        }
         inputBytes += pcm.length;
         // Latency is measured from the last chunk that actually contains speech (energy gate), not from silence.
         if (rms(pcm) > SPEECH_RMS) {
@@ -460,6 +473,17 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
         if (!briefed) {
           briefed = true;
           noteToModel("[system] Session opened. Brief the seller now.");
+        }
+      } else if (msg.type === "activity_start" && holdToTalk) {
+        holding = true;
+        turnOpened = false;
+      } else if (msg.type === "activity_end" && holdToTalk) {
+        holding = false;
+        if (turnOpened) {
+          turnOpened = false;
+          lastInputAt = Date.now(); // latency counts from the moment the seller lets go
+          awaitingFirstAudio = true;
+          toGemini({ realtimeInput: { activityEnd: {} } });
         }
       } else if (msg.type === "audio_end") {
         toGemini({ realtimeInput: { audioStreamEnd: true } });

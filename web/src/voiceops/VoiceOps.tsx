@@ -259,8 +259,28 @@ function AgentTab({ agent, refresh }: { agent: ReturnType<typeof useVoiceAgent>;
             )}
             {agent.model ? <span className="vo-model">{agent.model}</span> : null}
           </div>
+          {live && agent.holdToTalk ? (
+            <button
+              type="button"
+              className={`vo-hold${agent.holding ? " is-holding" : ""}`}
+              onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); agent.holdStart(); }}
+              onPointerUp={() => agent.holdEnd()}
+              onPointerCancel={() => agent.holdEnd()}
+              onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); agent.holdStart(); } }}
+              onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); agent.holdEnd(); } }}
+              aria-pressed={agent.holding}
+            >
+              {agent.holding ? "Listening… release when done" : "Hold to talk"}
+            </button>
+          ) : null}
+          <label className="vo-noisy">
+            <input type="checkbox" checked={agent.holdToTalk} onChange={(e) => agent.setHoldToTalk(e.target.checked)} />
+            <span>Noisy shop (TV, market): hold to talk</span>
+          </label>
           {agent.error ? <p className="vo-error" role="alert">{agent.error}</p> : null}
-          <p className="vo-hint">Speak Hindi, Hinglish, Tamil or English. The AI looks things up, proposes the change and waits for your yes. Interrupt it any time.</p>
+          <p className="vo-hint">{agent.holdToTalk
+            ? "Hold the button while you speak and let go when done. Background voices cannot start a turn or cut the agent off."
+            : "Speak Hindi, Hinglish, Tamil or English. The AI looks things up, proposes the change and waits for your yes. Interrupt it any time."}</p>
         </Card>
 
         <Card variant="form" className="vo-convo">

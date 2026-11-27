@@ -4622,3 +4622,10 @@ html, body, #root {
   .cp .dash-card-head { flex-direction: column; align-items: stretch; }
   .cp-hero-actions { justify-content: flex-start; }
 }
+
+/* Hold-to-talk (noisy shop mode) */
+.vo-hold { width: 100%; min-height: 64px; margin-top: 4px; border: 0; border-radius: 16px; background: var(--ink); color: var(--on-ink); font: inherit; font-size: 1.05rem; font-weight: 600; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none; transition: transform 0.15s var(--ease), background 0.15s var(--ease); }
+.vo-hold:focus-visible { outline: 3px solid var(--ai-violet); outline-offset: 3px; }
+.vo-hold.is-holding { background: var(--danger); color: var(--on-danger); transform: scale(0.98); }
+.vo-noisy { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.9rem; color: var(--muted); cursor: pointer; }
+.vo-noisy input { width: 18px; height: 18px; accent-color: var(--ink); }
