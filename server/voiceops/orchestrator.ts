@@ -436,7 +436,7 @@ writeTools.create_purchase_order = {
     if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
     const total = quantity * supplier!.unit_cost;
     return {
-      args: { product_id: product.id, supplier_id: supplier!.id, quantity },
+      args: { product_id: product.id, supplier_id: supplier!.id, quantity, total_inr: total },
       readback: `Send ${supplier!.name} a purchase order for ${quantity} × ${product.name} at ${inr(supplier!.unit_cost)} each, ${inr(total)} in total, expected in about ${supplier!.lead_time_days} days.${forecast ? ` Why: ${forecast.reason}` : ""}`,
     };
   },
@@ -447,8 +447,11 @@ writeTools.create_purchase_order = {
     const quantity = Number(args.quantity);
     const verdict = policy.purchaseOrderCheck(quantity, supplier.unit_cost, supplier.min_order_qty, true);
     if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
-    const poId = id("po");
     const total = quantity * supplier.unit_cost;
+    if (args.total_inr !== undefined && Math.round(Number(args.total_inr)) !== Math.round(total)) {
+      throw new ToolError("STATE_CHANGED", "The supplier's price changed since you approved; nothing was ordered. Ask again for the new total.");
+    }
+    const poId = id("po");
     await client.query(
       `INSERT INTO purchase_orders (id, seller_id, supplier_id, product_id, product_name, quantity, unit_cost, total, state)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'sent')`,
@@ -520,7 +523,7 @@ writeTools.issue_refund = {
     const reason = policy.normalizeText(args.reason, 300) || "Seller-approved refund";
     return {
       args: { order_no: order.order_no, amount, reason },
-      readback: `Refund ${inr(amount)} to ${order.buyer_name} for order ${order.order_no} (paid ${inr(order.total)}). Reason: ${reason}. This is a critical action: tap Approve on screen. A spoken yes is not accepted for refunds.`,
+      readback: `Refund ${inr(amount)} to ${order.buyer_name} for order ${order.order_no} (paid ${inr(order.total)}). Reason: ${reason}.`,
     };
   },
   async execute(client, ctx, args) {
@@ -807,7 +810,7 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
     const prepared = await tx((client) => write.prepare(client, ctx, args));
     const hash = hashArgs(ctx.user.id, name, prepared.args);
     const existing = await getPool().query(
-      `SELECT id, readback, expires_at, state, decided_at FROM voiceops_approvals
+      `SELECT id, readback, expires_at, state, decided_at, tier FROM voiceops_approvals
         WHERE user_id = $1 AND args_hash = $2 AND (state = 'pending' AND expires_at > now() OR (state = 'executed' AND decided_at > now() - interval '2 minutes'))
         ORDER BY created_at DESC LIMIT 1`,
       [ctx.user.id, hash],
@@ -819,22 +822,25 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
       const row = existing.rows[0];
       const ms = Date.now() - started;
       const actionId = await record(ctx, name, prepared.args, "awaiting_approval", { result: { duplicate_of: row.id }, ms });
-      return { ok: true, status: "awaiting_approval", actionId, message: `Already waiting for approval: ${row.readback}`, approval: { id: row.id, readback: row.readback, expiresAt: new Date(row.expires_at).toISOString(), duplicate: true, tier: policy.approvalTier(name) }, latencyMs: ms };
+      return { ok: true, status: "awaiting_approval", actionId, message: `Already waiting for approval: ${row.readback}`, approval: { id: row.id, readback: row.readback, expiresAt: new Date(row.expires_at).toISOString(), duplicate: true, tier: row.tier }, latencyMs: ms };
     }
     const approvalId = id("apr");
     const expiresAt = new Date(Date.now() + policy.APPROVAL_TTL_MS).toISOString();
     const ms = Date.now() - started;
-    const actionId = await record(ctx, name, prepared.args, "awaiting_approval", { ms, result: { trace } });
+    const { tier, reason: tierReason } = policy.approvalTierFor(name, prepared.args);
+    const readback = tier === "critical" ? `${prepared.readback} Critical action (${tierReason.replace(/\.$/, "")}): tap Approve on screen; a spoken yes is not accepted.` : prepared.readback;
+    if (trace) trace = { ...trace, checks: trace.checks.map((c) => (c.rule === "Human approval before any change" ? { ...c, detail: tier === "critical" ? `Critical: ${tierReason} Only a tap on Approve executes it; a spoken yes and the model's yes do not count.` : c.detail } : c)) };
+    const actionId = await record(ctx, name, prepared.args, "awaiting_approval", { ms, result: { trace, tier } });
     await getPool().query(
-      `INSERT INTO voiceops_approvals (id, session_id, user_id, tool, args, args_hash, readback, expires_at, action_id)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)`,
-      [approvalId, ctx.sessionId, ctx.user.id, name, JSON.stringify(prepared.args), hash, prepared.readback, expiresAt, actionId],
+      `INSERT INTO voiceops_approvals (id, session_id, user_id, tool, args, args_hash, readback, expires_at, action_id, tier)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)`,
+      [approvalId, ctx.sessionId, ctx.user.id, name, JSON.stringify(prepared.args), hash, readback, expiresAt, actionId, tier],
     );
     return {
-      ok: true, status: "awaiting_approval", actionId, approval: { id: approvalId, readback: prepared.readback, expiresAt, tier: policy.approvalTier(name) },
-      message: policy.approvalTier(name) === "critical"
-        ? `Read this back, then ask the seller to TAP Approve on screen (a spoken yes cannot approve this): ${prepared.readback}`
-        : `Read this back to the seller and wait for a clear yes: ${prepared.readback}`,
+      ok: true, status: "awaiting_approval", actionId, approval: { id: approvalId, readback, expiresAt, tier },
+      message: tier === "critical"
+        ? `Read this back, then ask the seller to TAP Approve on screen (a spoken yes cannot approve this): ${readback}`
+        : `Read this back to the seller and wait for a clear yes: ${readback}`,
       latencyMs: ms, trace,
     };
   } catch (error) {
@@ -862,9 +868,9 @@ export async function decideApproval(
   };
 
   if (decision === "approve" && via === "voice") {
-    const pending = (await getPool().query("SELECT tool FROM voiceops_approvals WHERE id = $1 AND user_id = $2", [approvalId, ctx.user.id])).rows[0];
-    if (pending && policy.approvalTier(pending.tool) === "critical") {
-      return fail("CRITICAL_NEEDS_TAP", "Refunds and other critical actions are approved only with a tap on the Approve button, never by voice. Ask the seller to tap Approve.");
+    const pending = (await getPool().query("SELECT tool, tier FROM voiceops_approvals WHERE id = $1 AND user_id = $2", [approvalId, ctx.user.id])).rows[0];
+    if (pending && (pending.tier === "critical" || policy.approvalTier(pending.tool) === "critical")) {
+      return fail("CRITICAL_NEEDS_TAP", "This is a critical action (refund, cancellation, price change or a large change), so only a tap on the Approve button approves it, never voice. Ask the seller to tap Approve.");
     }
     if (!policy.isAffirmative(utterance)) return fail("NOT_CONFIRMED", "That was not a clear yes. Ask again, or use the Approve button.");
   }
@@ -1185,7 +1191,7 @@ export async function listActivity(user: UserRecord, limit = 50) {
 export async function listApprovals(user: UserRecord, state: string | null = null) {
   assertSeller(user);
   const res = await getPool().query(
-    `SELECT id, session_id, tool, args, readback, state, decided_via, created_at, decided_at, expires_at, action_id
+    `SELECT id, session_id, tool, args, readback, state, decided_via, created_at, decided_at, expires_at, action_id, tier
        FROM voiceops_approvals WHERE user_id = $1 AND ($2::text IS NULL OR state = $2)
         AND NOT (state = 'pending' AND expires_at <= now())
       ORDER BY created_at DESC LIMIT 100`,

@@ -434,6 +434,7 @@ export type VoiceAction = {
 export type VoiceApproval = {
   id: string;
   tool: string;
+  tier?: "standard" | "critical";
   args: Record<string, unknown>;
   readback: string;
   state: "pending" | "approved" | "rejected" | "expired" | "executed";

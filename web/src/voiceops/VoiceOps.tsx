@@ -323,6 +323,7 @@ function ApprovalsTab({ tick, refresh }: { tick: number; refresh: () => void }) 
         <li key={a.id} className="vo-row">
           <div>
             <strong>{label(a.tool)}</strong> <Badge tone={a.state === "pending" ? "warning" : a.state === "executed" ? "success" : "neutral"}>{a.state === "executed" ? "approved & done" : a.state}</Badge>
+            {a.tier === "critical" ? <> <Badge tone="danger">Critical · tap only</Badge></> : null}
             <p className="vo-msg">{a.readback}</p>
             <p className="vo-hint">{new Date(a.created_at).toLocaleString()}{a.decided_via ? ` · decided by ${a.decided_via}` : ""}</p>
           </div>

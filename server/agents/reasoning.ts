@@ -163,7 +163,6 @@ export function buildTrace(tool: string, facts: Facts): Trace {
       const amount = a.amount === undefined || a.amount === null || a.amount === "" ? o?.total ?? 0 : Number(a.amount);
       intent = `Refund ${inr(amount)} on order ${o?.order_no}`;
       if (o) checks.push(fromVerdict(`Delivered, within ${policy.REFUND_WINDOW_DAYS} days, at most the amount paid, not refunded before`, policy.refundEligibility(o.status as never, o.total, amount, o.updated_at ?? o.created_at, Boolean(facts.refunded)), `${inr(amount)} of ${inr(o.total)} paid.`));
-      checks.push({ rule: "Critical action: only a tap approves", passed: true, detail: "A spoken yes is never accepted for refunds; the seller must tap Approve.", hard: true });
       checks.push({ rule: "Money is simulated in this prototype", passed: true, detail: "The refund is recorded and the buyer is told; no payment is moved.", hard: false });
       break;
     }
@@ -176,7 +175,7 @@ export function buildTrace(tool: string, facts: Facts): Trace {
       break;
   }
 
-  checks.push({ rule: "Human approval before any change", passed: true, detail: policy.approvalTier(tool) === "critical" ? "Only a tap on Approve executes this; the model's yes and a spoken yes do not count." : "The action waits for a spoken or tapped yes; the model's yes does not count.", hard: true });
+  checks.push({ rule: "Human approval before any change", passed: true, detail: "The action waits for a spoken or tapped yes; the model's yes does not count.", hard: true });
   const failedHard = checks.filter((c) => c.hard && !c.passed);
   const warnings = checks.filter((c) => !c.hard && !c.passed);
   if (failedHard.length) {

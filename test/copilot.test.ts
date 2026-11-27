@@ -127,18 +127,25 @@ describe("co-pilot: policy and approval tiers", () => {
     assert.equal((policy.refundEligibility("delivered", 4800, 100, recent, true, NOW) as { code: string }).code, "ALREADY_REFUNDED");
     assert.equal((policy.refundEligibility("delivered", 4800, 100, new Date(NOW - 40 * 24 * H).toISOString(), false, NOW) as { code: string }).code, "OUT_OF_POLICY");
   });
-  it("refunds are the critical tier; everything else is standard", () => {
-    assert.equal(policy.approvalTier("issue_refund"), "critical");
-    for (const t of ["create_purchase_order", "reroute_shipment", "adjust_stock", "notify_delayed_customers"]) assert.equal(policy.approvalTier(t), "standard");
+  it("tiers: refunds, cancellations and offers are always critical; size makes the rest critical", () => {
+    for (const t of ["issue_refund", "cancel_order", "make_offer"]) assert.equal(policy.approvalTier(t), "critical", t);
+    assert.equal(policy.approvalTier("create_purchase_order", { total_inr: 24_999 }), "standard");
+    assert.equal(policy.approvalTier("create_purchase_order", { total_inr: 25_000 }), "critical");
+    assert.equal(policy.approvalTier("adjust_stock", { delta: 99 }), "standard");
+    assert.equal(policy.approvalTier("adjust_stock", { delta: -100 }), "critical");
+    assert.equal(policy.approvalTier("notify_delayed_customers", { order_nos: [1, 2, 3] }), "standard");
+    assert.equal(policy.approvalTier("notify_delayed_customers", { order_nos: Array.from({ length: 10 }, (_, i) => i) }), "critical");
+    for (const t of ["update_order_status", "send_customer_message", "reroute_shipment", "create_return"]) assert.equal(policy.approvalTier(t), "standard", t);
+    assert.match(policy.approvalTierFor("issue_refund").reason, /money/);
   });
-  it("the reasoning trace says only a tap approves a refund", () => {
+  it("the reasoning trace for a refund checks eligibility and says the money is simulated", () => {
     const t = buildTrace("issue_refund", {
       args: { order_no: 1042 },
       order: { order_no: 1042, status: "delivered", customer: "Ravi", total: 4800, created_at: new Date(NOW - 90 * H).toISOString(), updated_at: new Date(Date.now() - 48 * H).toISOString(), owned: true },
       refunded: false,
     });
     assert.equal(t.verdict, "needs_approval");
-    assert.ok(t.checks.some((c) => /only a tap/i.test(c.rule)));
+    assert.ok(t.checks.some((c) => /simulated/i.test(c.rule)));
   });
 });
 

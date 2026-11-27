@@ -983,7 +983,7 @@ async function prepareDatabase(): Promise<void> {
   const missing = await withClient(async (client) => {
     const res = await client.query("SELECT id FROM schema_migrations");
     const applied = new Set(res.rows.map((row) => row.id as string));
-    return ["001_init.sql", "002_lifecycle_language_demo.sql", "003_offers_shipment.sql", "004_voiceops.sql", "005_voiceops_orders.sql", "006_voiceops_latency.sql", "007_voiceops_baselines.sql", "008_agent_team.sql", "009_copilot.sql"].filter((id) => !applied.has(id));
+    return ["001_init.sql", "002_lifecycle_language_demo.sql", "003_offers_shipment.sql", "004_voiceops.sql", "005_voiceops_orders.sql", "006_voiceops_latency.sql", "007_voiceops_baselines.sql", "008_agent_team.sql", "009_copilot.sql", "010_approval_tiers.sql"].filter((id) => !applied.has(id));
   });
   if (missing.length) {
     console.error(`WARNING: database migrations not applied: ${missing.join(", ")}. Run npm run db:migrate.`);

@@ -88,6 +88,7 @@ function AlertRow({ alert, onChange }: { alert: CopilotAlert; onChange: () => vo
         {pendingId ? (
           <div className="cp-proposal" role="group" aria-label="Waiting for your approval">
             {proposal?.approval ? <p className="vo-readback">“{proposal.approval.readback}”</p> : <p className="vo-hint">Proposal waiting for your approval.</p>}
+            {proposal?.approval?.tier === "critical" ? <p className="vo-hint">Critical: only your tap approves this.</p> : null}
             <div className="vo-actions">
               <Button onClick={() => void decide("approve")} disabled={busy}>Approve</Button>
               <Button variant="secondary" onClick={() => void decide("reject")} disabled={busy}>Reject</Button>

@@ -124,12 +124,49 @@ export function refundEligibility(status: OrderStatus, paidTotal: number, amount
 }
 
 /**
- * Approval tiers. "standard": a spoken yes that matches the read-back, or a tap.
- * "critical": money leaves the business or many customers are affected; only a tap on Approve counts,
- * because a spoken yes can be misheard in a noisy shop.
+ * Approval tiers.
+ * "standard": a spoken yes that matches the read-back, or a tap.
+ * "critical": money leaves the business, a price or an order is changed for good, or the action is large.
+ *   Only a tap on Approve counts, because a spoken yes can be misheard in a noisy shop. No agent, and no
+ *   model output, can approve either tier.
  */
 export type ApprovalTier = "standard" | "critical";
-const CRITICAL_TOOLS = new Set(["issue_refund"]);
-export function approvalTier(tool: string): ApprovalTier {
-  return CRITICAL_TOOLS.has(tool) ? "critical" : "standard";
+export const CRITICAL_PO_VALUE_INR = 25_000;
+export const CRITICAL_STOCK_DELTA = 100;
+export const CRITICAL_BATCH_SIZE = 10;
+
+export type TierReason = { tier: ApprovalTier; reason: string };
+
+/** Tier of a prepared action (its normalised, hash-bound arguments). */
+export function approvalTierFor(tool: string, args: Record<string, unknown> = {}): TierReason {
+  switch (tool) {
+    case "issue_refund":
+      return { tier: "critical", reason: "Refunds move money to the customer." };
+    case "cancel_order":
+      return { tier: "critical", reason: "Cancelling tells the customer their order is off." };
+    case "make_offer":
+      return { tier: "critical", reason: "A price change reaches the customer and cuts revenue." };
+    case "create_purchase_order": {
+      const total = Number(args.total_inr ?? 0);
+      return total >= CRITICAL_PO_VALUE_INR
+        ? { tier: "critical", reason: `Purchase of INR ${Math.round(total).toLocaleString("en-IN")} (INR ${CRITICAL_PO_VALUE_INR.toLocaleString("en-IN")} or more).` }
+        : { tier: "standard", reason: "Small purchase order." };
+    }
+    case "adjust_stock":
+      return Math.abs(Number(args.delta ?? 0)) >= CRITICAL_STOCK_DELTA
+        ? { tier: "critical", reason: `Stock change of ${CRITICAL_STOCK_DELTA} units or more.` }
+        : { tier: "standard", reason: "Small stock change." };
+    case "notify_delayed_customers": {
+      const n = Array.isArray(args.order_nos) ? args.order_nos.length : 0;
+      return n >= CRITICAL_BATCH_SIZE
+        ? { tier: "critical", reason: `One message to ${n} customers (${CRITICAL_BATCH_SIZE} or more).` }
+        : { tier: "standard", reason: "Small batch of customer updates." };
+    }
+    default:
+      return { tier: "standard", reason: "Routine change." };
+  }
+}
+
+export function approvalTier(tool: string, args: Record<string, unknown> = {}): ApprovalTier {
+  return approvalTierFor(tool, args).tier;
 }
