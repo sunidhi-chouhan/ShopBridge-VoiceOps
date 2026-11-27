@@ -24,8 +24,9 @@ import { Attention, DashHero, DashSection, EconomicsTiles, KpiRow, LatencyChart,
 import { AiStory } from "../ai/AiStory";
 import { TraceView } from "../ai/TraceView";
 import { AgentNetwork } from "../ai/AgentNetwork";
+import { CopilotTab } from "./Copilot";
 
-type Tab = "agent" | "team" | "how" | "approvals" | "activity" | "overview";
+type Tab = "agent" | "copilot" | "team" | "how" | "approvals" | "activity" | "overview";
 
 const TOOL_LABEL: Record<string, string> = {
   business_summary: "Business summary",
@@ -41,6 +42,15 @@ const TOOL_LABEL: Record<string, string> = {
   make_offer: "Offer special price",
   run_agent_team: "Ask the agent team",
   notify_delayed_customers: "Notify delayed customers",
+  copilot_briefing: "Co-pilot briefing",
+  forecast_stock: "Forecast stock",
+  sla_risk: "Check dispatch risk",
+  track_shipment: "Track shipment",
+  chat_insights: "Chat insights",
+  list_purchase_orders: "Purchase orders",
+  create_purchase_order: "Order from supplier",
+  reroute_shipment: "Re-book courier",
+  issue_refund: "Refund (tap only)",
   undo_action: "Undo",
 };
 const label = (tool: string) => TOOL_LABEL[tool] ?? tool.replace(/_/g, " ");
@@ -175,7 +185,7 @@ function ActionCard({
             <Button onClick={() => onApprove(item.approval!.id)} disabled={busy}>Approve</Button>
             <Button variant="secondary" onClick={() => onReject(item.approval!.id)} disabled={busy}>Cancel</Button>
           </div>
-          <p className="vo-hint">Or just say “haan, kar do” / “nahi”.</p>
+          <p className="vo-hint">{item.approval!.tier === "critical" ? "Critical action: only a tap on Approve counts. A spoken yes is not accepted." : "Or just say “haan, kar do” / “nahi”."}</p>
         </div>
       ) : item.message ? (
         <p className="vo-msg">{item.message}</p>
@@ -489,7 +499,7 @@ export function VoiceOps() {
     // Each tab starts at its top, even when the previous tab was scrolled far down.
     window.requestAnimationFrame(() => tabBar.current?.scrollIntoView({ block: "nearest" }));
   };
-  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["team", "Agent network"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
+  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["copilot", "Co-pilot"], ["team", "Agent network"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
   return (
     <div className="vo-page">
       <div className="vo-tabs" role="tablist" ref={tabBar}>
@@ -498,6 +508,7 @@ export function VoiceOps() {
         ))}
       </div>
       <div hidden={tab !== "agent"}><AgentTab agent={agent} refresh={refresh} /></div>
+      {tab === "copilot" ? <CopilotTab tick={tick} refresh={refresh} /> : null}
       {tab === "team" ? <AgentNetwork refresh={refresh} /> : null}
       {tab === "how" ? (
         <AiStory

@@ -4570,3 +4570,55 @@ html, body, #root {
 .an-detail { margin: 4px 0 0; color: var(--ink-2); font-size: 0.88rem; white-space: pre-wrap; }
 .an-state { margin: 8px 0 0; font-size: 0.86rem; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .an-edge.is-active { animation: none; } }
+
+/* ---- Proactive co-pilot tab ---- */
+.cp { display: grid; gap: 20px; padding-top: 18px; }
+.cp-hero { border-top: 3px solid var(--ai-violet); }
+.cp-hero-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.cp-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.cp-proposal { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--warning-soft); border: 1px solid var(--warning); display: grid; gap: 8px; }
+.cp-proposal .vo-readback { margin: 0; }
+.cp-closed .dash-att { opacity: 0.62; }
+.cp-closed .dash-att:hover { transform: none; box-shadow: none; }
+.cp-table-wrap { overflow-x: auto; margin: 0 -4px; }
+.cp-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+.cp-table th { text-align: left; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.cp-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.cp-table tr:last-child td { border-bottom: 0; }
+.cp-table small { color: var(--muted); }
+.cp-name { font-weight: 600; min-width: 150px; }
+.cp-trend { color: var(--muted); }
+.cp-days { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.cp-cover { position: relative; display: inline-block; width: 84px; height: 8px; border-radius: 99px; background: var(--sunken); overflow: visible; flex: none; }
+.cp-cover.is-empty { opacity: 0.5; }
+.cp-cover-fill { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--success); }
+.cp-cover-fill.is-critical { background: var(--danger); }
+.cp-cover-fill.is-warning { background: var(--warning); }
+.cp-cover-fill.is-no_demand { background: var(--muted); }
+.cp-cover-lead { position: absolute; top: -3px; width: 2px; height: 14px; margin-left: -1px; background: var(--ink); border-radius: 1px; }
+.cp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.cp-item { padding: 12px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); display: grid; gap: 6px; }
+.cp-item.is-stuck { border-color: var(--danger); background: var(--danger-soft); }
+.cp-item .vo-msg { margin: 0; }
+.cp-item-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cp-track { margin: 0; padding-left: 18px; color: var(--muted); font-size: 0.86rem; display: grid; gap: 2px; }
+.cp-track span { color: var(--ink); text-transform: capitalize; }
+.cp-insights { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.cp-insight { padding: 14px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--ai-violet); display: grid; gap: 8px; align-content: start; }
+.cp-insight.is-complaint { border-left-color: var(--danger); }
+.cp-insight.is-praise { border-left-color: var(--success); }
+.cp-insight-meta { display: flex; gap: 6px; align-items: center; }
+.cp-insight-meta small { color: var(--muted); }
+.cp-suggest { margin: 0; font-size: 0.9rem; }
+.cp-quote { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--sunken); font-size: 0.88rem; display: grid; gap: 4px; }
+.cp-quote-tr { color: var(--muted); font-style: italic; }
+.cp-quote cite { font-style: normal; font-size: 0.76rem; color: var(--muted); }
+@media (max-width: 640px) { .cp-hero-actions { justify-content: flex-start; } .cp-actions { justify-content: flex-start; } }
+@media (max-width: 960px) {
+  .cp .dash-att { grid-template-columns: auto minmax(0, 1fr); }
+  .cp .dash-att-action { grid-column: 2 / -1; justify-content: flex-start; }
+}
+@media (max-width: 640px) {
+  .cp .dash-card-head { flex-direction: column; align-items: stretch; }
+  .cp-hero-actions { justify-content: flex-start; }
+}

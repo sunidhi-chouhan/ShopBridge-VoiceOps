@@ -19,18 +19,20 @@ import type { UserRecord } from "../store-types";
 import { parseModelJson, triageCase } from "../triage";
 import * as orchestrator from "../voiceops/orchestrator";
 import type { Trace } from "./reasoning";
+import { loadForecasts, loadShipments, loadSlaRisks, type ProductForecast } from "../copilot/data";
 
 export const AGENTS = {
   supervisor: { name: "Supervisor", role: "Plans the work and hands tasks to specialists" },
-  monitor: { name: "Operations monitor", role: "Watches orders, stock and support cases" },
+  monitor: { name: "Operations monitor", role: "Forecasts stockouts, dispatch risk and stuck parcels" },
   comms: { name: "Customer-comms agent", role: "Drafts customer updates" },
-  inventory: { name: "Inventory agent", role: "Keeps stock from running out" },
+  inventory: { name: "Inventory agent", role: "Restocks from suppliers before products run out" },
+  logistics: { name: "Logistics agent", role: "Re-books stuck parcels and flags orders that may miss dispatch" },
   triage: { name: "Support-triage agent", role: "Reads open cases and recommends resolutions" },
   reasoning: { name: "Reasoning engine", role: "Checks every proposal against shop rules" },
   human: { name: "You", role: "Approve or reject; nothing changes without you" },
 } as const;
 export type AgentId = keyof typeof AGENTS;
-type Specialist = "comms" | "inventory" | "triage";
+type Specialist = "comms" | "inventory" | "logistics" | "triage";
 type Task = { agent: Specialist; goal: string; why: string };
 
 const id = (p: string) => `${p}${randomBytes(6).toString("hex")}`;
@@ -54,13 +56,29 @@ type Observations = {
   summary: { awaiting_dispatch: number; delayed: number[]; low_stock_products: number; open_returns: number; pending_approvals: number };
   lowStock: Array<{ id: string; name: string; stock: number }>;
   cases: Array<{ id: string; orderId: string; status: string; note: string }>;
+  /** Forecast says these run out before (critical) or around (warning) a restock could arrive. */
+  stockouts?: ProductForecast[];
+  stuck?: Array<{ order_no: number; courier: string; reason: string }>;
+  atRisk?: Array<{ order_no: number; customer: string; reason: string }>;
 };
 
 /** Deterministic plan: used when Gemini is unavailable, and to validate Gemini's plan. */
 export function rulePlan(obs: Observations): Task[] {
   const tasks: Task[] = [];
   if (obs.summary.delayed.length) tasks.push({ agent: "comms", goal: `Tell the ${obs.summary.delayed.length} delayed customer(s) about the delay`, why: `Orders ${obs.summary.delayed.join(", ")} are past 24 h without dispatch.` });
-  if (obs.lowStock.length) tasks.push({ agent: "inventory", goal: `Restock ${obs.lowStock.slice(0, MAX_RESTOCKS).map((p) => p.name).join(" and ")}`, why: `${obs.lowStock.length} product(s) are at 5 or fewer.` });
+  const stockouts = (obs.stockouts ?? []).filter((f) => f.supplier && f.suggested_qty > 0);
+  if (stockouts.length) {
+    tasks.push({ agent: "inventory", goal: `Order ${stockouts.slice(0, MAX_RESTOCKS).map((f) => f.name).join(" and ")} from the supplier`, why: stockouts.slice(0, MAX_RESTOCKS).map((f) => `${f.name}: ${f.reason}`).join(" ") });
+  } else if (obs.lowStock.length) {
+    tasks.push({ agent: "inventory", goal: `Restock ${obs.lowStock.slice(0, MAX_RESTOCKS).map((p) => p.name).join(" and ")}`, why: `${obs.lowStock.length} product(s) are at 5 or fewer.` });
+  }
+  if (obs.stuck?.length || obs.atRisk?.length) {
+    tasks.push({
+      agent: "logistics",
+      goal: [obs.stuck?.length ? `Re-book ${obs.stuck.length} stuck parcel(s)` : "", obs.atRisk?.length ? `warn ${obs.atRisk.length} customer(s) whose order may miss dispatch` : ""].filter(Boolean).join(" and "),
+      why: [...(obs.stuck ?? []).map((s) => `Order ${s.order_no}: ${s.reason}`), ...(obs.atRisk ?? []).map((r) => `Order ${r.order_no}: ${r.reason}`)].join(" "),
+    });
+  }
   if (obs.cases.length) tasks.push({ agent: "triage", goal: `Triage ${obs.cases.length} open support case(s)`, why: "Buyers are waiting on a resolution." });
   return tasks;
 }
@@ -71,9 +89,9 @@ async function supervisorPlan(obs: Observations): Promise<{ tasks: Task[]; sourc
   try {
     const { text, model } = await generateText({
       system: `You are the Supervisor of a team of AI agents running a small Indian online shop. Decide which specialists should act now and in what order.
-Specialists: comms (customer updates for delayed orders), inventory (restock low products), triage (support cases).
+Specialists: comms (customer updates for delayed orders), inventory (supplier restocks for predicted stockouts), logistics (stuck parcels, orders that may miss dispatch), triage (support cases).
 Return JSON: {"order": [specialist names, most urgent first], "rationale": one or two sentences}. Only use specialists that have work in the OBSERVATIONS.`,
-      prompt: `OBSERVATIONS (JSON):\n${JSON.stringify({ delayed_orders: obs.summary.delayed, low_stock: obs.lowStock.map((p) => `${p.name}: ${p.stock}`), open_support_cases: obs.cases.length, pending_approvals: obs.summary.pending_approvals })}`,
+      prompt: `OBSERVATIONS (JSON):\n${JSON.stringify({ delayed_orders: obs.summary.delayed, predicted_stockouts: (obs.stockouts ?? []).map((f) => f.reason), low_stock: obs.lowStock.map((p) => `${p.name}: ${p.stock}`), stuck_parcels: (obs.stuck ?? []).map((s) => s.reason), dispatch_at_risk: (obs.atRisk ?? []).map((r) => r.order_no), open_support_cases: obs.cases.length, pending_approvals: obs.summary.pending_approvals })}`,
       temperature: 0.2,
       maxOutputTokens: 1024,
       purpose: "team plan",
@@ -111,14 +129,22 @@ async function observe(user: UserRecord, ctx: orchestrator.Ctx): Promise<Observa
   const cases = (await listRequests(user).catch(() => []))
     .filter((r) => r.orderId && r.status !== "completed")
     .map((r) => ({ id: r.id, orderId: r.orderId!, status: r.status, note: r.note }));
-  return { summary, lowStock, cases };
+  const client = await getPool().connect();
+  try {
+    const stockouts = (await loadForecasts(client, user.id)).filter((f) => f.status === "critical" || f.status === "warning");
+    const stuck = (await loadShipments(client, user.id)).filter((s) => s.stuck).map((s) => ({ order_no: s.order_no, courier: s.courier, reason: s.reason }));
+    const atRisk = (await loadSlaRisks(client, user.id)).risks.filter((r) => r.level === "high").map((r) => ({ order_no: r.order_no, customer: r.customer, reason: r.reason }));
+    return { summary, lowStock, cases, stockouts, stuck, atRisk };
+  } finally {
+    client.release();
+  }
 }
 
 async function execute(user: UserRecord, run: Run, ctx: orchestrator.Ctx): Promise<string> {
   const obs = await observe(user, ctx);
   await run.step("monitor", "observe", "Scanned orders, stock and support cases", {
     to: "supervisor",
-    detail: `${obs.summary.delayed.length} delayed (${obs.summary.delayed.join(", ") || "none"}) · ${obs.lowStock.length} low-stock product(s) · ${obs.cases.length} open support case(s) · ${obs.summary.pending_approvals} approval(s) already waiting.`,
+    detail: `${obs.summary.delayed.length} delayed (${obs.summary.delayed.join(", ") || "none"}) · ${obs.stockouts?.length ?? 0} predicted stockout(s)${obs.stockouts?.length ? ` (${obs.stockouts.map((f) => f.name).join(", ")})` : ""} · ${obs.stuck?.length ?? 0} stuck parcel(s) · ${obs.atRisk?.length ?? 0} order(s) at risk of missing dispatch · ${obs.lowStock.length} low-stock product(s) · ${obs.cases.length} open support case(s) · ${obs.summary.pending_approvals} approval(s) already waiting.`,
   });
 
   const plan = await supervisorPlan(obs);
@@ -141,11 +167,34 @@ async function execute(user: UserRecord, run: Run, ctx: orchestrator.Ctx): Promi
       if (r.approval) proposals++;
     }
 
-    if (task.agent === "inventory") {
+    if (task.agent === "inventory" && (obs.stockouts ?? []).some((f) => f.supplier && f.suggested_qty > 0)) {
+      for (const f of (obs.stockouts ?? []).filter((x) => x.supplier && x.suggested_qty > 0).slice(0, MAX_RESTOCKS)) {
+        const r = await orchestrator.runTool(ctx, "create_purchase_order", { product_name: f.name, quantity: f.suggested_qty });
+        await run.step("inventory", "propose", `Proposed: ${r.approval?.readback ?? r.message}`, { to: "reasoning", detail: `Forecast: ${f.reason} Suggested ${f.suggested_qty} from ${f.supplier!.name} (lead time ${f.lead_time_days} days).` });
+        await run.step("reasoning", "decide", r.trace?.explanation ?? r.message, { to: r.approval ? "human" : undefined, trace: r.trace, approvalId: r.approval?.id });
+        if (r.approval) proposals++;
+      }
+    } else if (task.agent === "inventory") {
       for (const p of obs.lowStock.slice(0, MAX_RESTOCKS)) {
         if (p.stock >= RESTOCK_TO) continue;
         const r = await orchestrator.runTool(ctx, "adjust_stock", { product_id: p.id, set_to: RESTOCK_TO });
         await run.step("inventory", "propose", `Proposed: ${r.approval?.readback ?? r.message}`, { to: "reasoning", detail: `${p.name} is at ${p.stock}; restock to ${RESTOCK_TO} so it does not sell out.` });
+        await run.step("reasoning", "decide", r.trace?.explanation ?? r.message, { to: r.approval ? "human" : undefined, trace: r.trace, approvalId: r.approval?.id });
+        if (r.approval) proposals++;
+      }
+    }
+
+    if (task.agent === "logistics") {
+      for (const s of (obs.stuck ?? []).slice(0, 2)) {
+        const r = await orchestrator.runTool(ctx, "reroute_shipment", { order_no: s.order_no });
+        await run.step("logistics", "propose", `Proposed: ${r.approval?.readback ?? r.message}`, { to: "reasoning", detail: s.reason });
+        await run.step("reasoning", "decide", r.trace?.explanation ?? r.message, { to: r.approval ? "human" : undefined, trace: r.trace, approvalId: r.approval?.id });
+        if (r.approval) proposals++;
+      }
+      for (const a of (obs.atRisk ?? []).slice(0, 2)) {
+        const message = `Hi ${a.customer.split(/\s+/)[0]}, your order is being prepared and we will share tracking as soon as it ships. Thank you for your patience!`;
+        const r = await orchestrator.runTool(ctx, "send_customer_message", { order_no: a.order_no, message });
+        await run.step("logistics", "propose", `Proposed: ${r.approval?.readback ?? r.message}`, { to: "reasoning", detail: `Dispatch risk: ${a.reason}` });
         await run.step("reasoning", "decide", r.trace?.explanation ?? r.message, { to: r.approval ? "human" : undefined, trace: r.trace, approvalId: r.approval?.id });
         if (r.approval) proposals++;
       }

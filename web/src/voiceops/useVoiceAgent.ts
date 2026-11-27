@@ -11,7 +11,7 @@ export type TimelineItem = {
   message?: string;
   latencyMs?: number;
   actionId?: string;
-  approval?: { id: string; readback: string; expiresAt: string };
+  approval?: { id: string; readback: string; expiresAt: string; tier?: "standard" | "critical" };
   humanInvolved?: boolean;
   trace?: import("../ai/TraceView").DecisionTrace;
   at: number;

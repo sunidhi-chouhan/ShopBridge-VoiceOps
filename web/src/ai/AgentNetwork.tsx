@@ -5,17 +5,18 @@ import { useToast } from "../ui/Toast";
 import { TraceView } from "./TraceView";
 
 const NODES: Record<string, { name: string; role: string; x: number; y: number }> = {
-  monitor: { name: "Operations monitor", role: "Watches orders, stock, cases", x: 110, y: 70 },
+  monitor: { name: "Operations monitor", role: "Forecasts stock · SLA · couriers", x: 110, y: 70 },
   supervisor: { name: "Supervisor", role: "Plans · hands off (Gemini)", x: 380, y: 70 },
-  comms: { name: "Customer comms", role: "Drafts updates (Gemini)", x: 150, y: 210 },
-  inventory: { name: "Inventory", role: "Proposes restocks", x: 380, y: 210 },
-  triage: { name: "Support triage", role: "Recommends resolutions (Gemini)", x: 610, y: 210 },
+  comms: { name: "Customer comms", role: "Drafts updates (Gemini)", x: 95, y: 210 },
+  inventory: { name: "Inventory", role: "Supplier restocks", x: 272, y: 210 },
+  logistics: { name: "Logistics", role: "Couriers · dispatch risk", x: 449, y: 210 },
+  triage: { name: "Support triage", role: "Resolutions (Gemini)", x: 626, y: 210 },
   reasoning: { name: "Reasoning engine", role: "Rules check every proposal", x: 265, y: 345 },
   human: { name: "You", role: "Approve or reject", x: 560, y: 345 },
 };
 const EDGES: Array<[string, string]> = [
-  ["monitor", "supervisor"], ["supervisor", "comms"], ["supervisor", "inventory"], ["supervisor", "triage"],
-  ["comms", "reasoning"], ["inventory", "reasoning"], ["reasoning", "human"], ["triage", "human"],
+  ["monitor", "supervisor"], ["supervisor", "comms"], ["supervisor", "inventory"], ["supervisor", "logistics"], ["supervisor", "triage"],
+  ["comms", "reasoning"], ["inventory", "reasoning"], ["logistics", "reasoning"], ["reasoning", "human"], ["triage", "human"],
 ];
 const KIND_LABEL: Record<string, string> = {
   observe: "Observed", plan: "Plan", handoff: "Handoff", draft: "Draft", propose: "Proposal", decide: "Decision",
@@ -29,7 +30,7 @@ function Diagram({ run }: { run: AgentRun | null }) {
   const used = new Set(steps.flatMap((s) => (s.to_agent ? [`${s.agent}>${s.to_agent}`] : [])));
   const activeEdge = last?.to_agent ? `${last.agent}>${last.to_agent}` : null;
   const counts = steps.reduce<Record<string, number>>((m, s) => ((m[s.agent] = (m[s.agent] ?? 0) + 1), m), {});
-  const W = 170, H = 58;
+  const W = 164, H = 58;
   return (
     <svg className="an-diagram" viewBox="0 0 720 400" role="img" aria-label={`Agent team diagram. ${last ? `Latest: ${last.title}` : "Not run yet."}`}>
       <defs>

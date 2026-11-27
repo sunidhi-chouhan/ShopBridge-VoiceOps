@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError } from "../errors";
 import type { UserRecord } from "../store-types";
@@ -6,10 +7,22 @@ import { DIGEST_AUDIENCES, DIGEST_LANGUAGES, dailyDigest, type DigestAudience, t
 import * as orchestrator from "./orchestrator";
 import { runPreflight } from "./preflight";
 import { listTeamRuns, startTeamRun } from "../agents/team";
+import { copilotOverview, dismissAlert, proposeFromAlert, scanAllSellers, scanSeller } from "../copilot/monitor";
+import { runInsights } from "../copilot/insights";
+
+/** Cloud Scheduler calls the sweep with a shared key from Secret Manager; without COPILOT_CRON_KEY the route does not exist. */
+function cronAuthorized(req: IncomingMessage): boolean {
+  const expected = process.env.COPILOT_CRON_KEY?.trim();
+  const given = String(req.headers["x-copilot-cron-key"] ?? "");
+  if (!expected || !given) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(given);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 export type RouteDeps = {
   currentUser: (req: IncomingMessage) => Promise<UserRecord>;
-  readJson: (req: IncomingMessage) => Promise<unknown>;
+  readJson: (req: IncomingMessage, limit?: number) => Promise<unknown>;
   sendJson: (res: ServerResponse, status: number, body: unknown) => void;
   notifier: orchestrator.Notifier;
   openRoom?: (orderId: string) => Promise<unknown>;
@@ -25,6 +38,11 @@ const debugToolsEnabled = () => process.env.NODE_ENV !== "production" || process
 export async function handleVoiceOpsApi(req: IncomingMessage, res: ServerResponse, url: URL, deps: RouteDeps): Promise<boolean> {
   const { pathname } = url;
   if (!pathname.startsWith("/api/voiceops/")) return false;
+  if (req.method === "POST" && pathname === "/api/voiceops/copilot/cron") {
+    if (!cronAuthorized(req)) throw new HttpError(404, "NOT_FOUND", "Not found.");
+    deps.sendJson(res, 200, await scanAllSellers());
+    return true;
+  }
   const user = await deps.currentUser(req);
   const method = req.method ?? "GET";
   const ctxFor = async (sessionId: unknown): Promise<orchestrator.Ctx> => ({
@@ -88,6 +106,27 @@ export async function handleVoiceOpsApi(req: IncomingMessage, res: ServerRespons
     const body = object(await deps.readJson(req));
     const hint = typeof body.language === "string" ? body.language.slice(0, 20) : null;
     deps.sendJson(res, 201, { sessionId: await orchestrator.startSession(user, hint) });
+    return true;
+  }
+
+  // Proactive co-pilot: forecasts, SLA risk, shipments, alerts with suggested actions, chat insights.
+  if (method === "GET" && pathname === "/api/voiceops/copilot") {
+    deps.sendJson(res, 200, await copilotOverview(user));
+    return true;
+  }
+  if (method === "POST" && pathname === "/api/voiceops/copilot/scan") {
+    const scan = await scanSeller(user, "dashboard");
+    deps.sendJson(res, 200, { raised: scan.raised, resolved: scan.resolved, ms: scan.ms, counts: scan.counts });
+    return true;
+  }
+  if (method === "POST" && pathname === "/api/voiceops/copilot/insights") {
+    const body = object(await deps.readJson(req, 256 * 1024));
+    deps.sendJson(res, 200, await runInsights(user, body.conversations));
+    return true;
+  }
+  const alertAction = pathname.match(/^\/api\/voiceops\/copilot\/alerts\/([a-z0-9]+)\/(propose|dismiss)$/);
+  if (method === "POST" && alertAction) {
+    deps.sendJson(res, 200, alertAction[2] === "propose" ? await proposeFromAlert(user, alertAction[1], deps.notifier) : await dismissAlert(user, alertAction[1]));
     return true;
   }
 

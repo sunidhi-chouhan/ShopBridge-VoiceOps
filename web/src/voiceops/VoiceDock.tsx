@@ -34,6 +34,7 @@ export function VoiceDock() {
       {waiting.map((item) => (
         <div key={item.key} className="vo-dock-approval">
           <p className="vo-readback">“{item.approval!.readback}”</p>
+          {item.approval!.tier === "critical" ? <p className="vo-hint">Critical: tap Approve. Voice cannot approve this.</p> : null}
           <div className="vo-actions">
             <Button onClick={() => agent.approve(item.approval!.id)}>Approve</Button>
             <Button variant="secondary" onClick={() => agent.reject(item.approval!.id)}>Cancel</Button>

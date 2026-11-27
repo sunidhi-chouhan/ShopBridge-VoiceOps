@@ -14,6 +14,8 @@ import { HttpError } from "../errors";
 import type { UserRecord } from "../store-types";
 import * as policy from "./policy";
 import { buildTrace, type Facts, type Trace } from "../agents/reasoning";
+import { courierConnector, supplierConnector } from "../copilot/connectors";
+import { listPurchaseOrders, loadForecasts, loadShipments, loadSlaRisks, shipmentFor, supplierFor } from "../copilot/data";
 
 /** Posts an order-chat event. `extra.card` asks for a rich card (for example the offer card) instead of plain text. */
 export type Notifier = (channelId: string | null, text: string, extra?: { orderId: string; card?: "offer" }) => Promise<boolean>;
@@ -26,7 +28,7 @@ export type ToolResult = {
   message: string;
   data?: unknown;
   code?: string;
-  approval?: { id: string; readback: string; expiresAt: string; duplicate?: boolean };
+  approval?: { id: string; readback: string; expiresAt: string; duplicate?: boolean; tier?: policy.ApprovalTier };
   latencyMs: number;
   /** Reasoning-engine decision trace: facts considered, rules checked, verdict and why. */
   trace?: Trace;
@@ -210,9 +212,13 @@ writeTools.update_order_status = {
     await client.query(
       `UPDATE orders SET status = $2, updated_at = now(),
          courier = CASE WHEN $3::text IS NULL THEN courier ELSE $3 END,
-         awb = CASE WHEN $4::text IS NULL THEN awb ELSE $4 END WHERE id = $1`,
+         awb = CASE WHEN $4::text IS NULL THEN awb ELSE $4 END,
+         shipped_at = CASE WHEN $2 = 'shipped' THEN now() ELSE shipped_at END WHERE id = $1`,
       [order.id, status, (args.courier as string) ?? null, (args.awb as string) ?? null],
     );
+    if (status === "shipped" && args.courier && args.awb) {
+      await client.query("INSERT INTO shipment_events (id, order_id, courier, awb, status, note) VALUES ($1,$2,$3,$4,'picked_up','Handed to the courier')", [id("shp"), order.id, args.courier, args.awb]);
+    }
     return {
       data: { order_no: order.order_no, from: order.status, to: status },
       message: `Order ${order.order_no} is now ${status}.`,
@@ -411,6 +417,128 @@ writeTools.request_human_review = {
   },
 };
 
+
+// ---------------------------------------------------------------------------
+// Co-pilot write tools: supplier restock, courier re-route, refund (critical)
+// ---------------------------------------------------------------------------
+
+writeTools.create_purchase_order = {
+  async prepare(client, ctx, args) {
+    const product = await findProduct(client, ctx.user.id, args);
+    const supplier = await supplierFor(client, ctx.user.id, product.id);
+    const forecast = (await loadForecasts(client, ctx.user.id)).find((f) => f.product_id === product.id);
+    const asked = args.quantity === undefined || args.quantity === null || args.quantity === "" ? null : Number(args.quantity);
+    if (asked === null && !forecast?.suggested_qty) {
+      throw new ToolError("NO_REORDER_NEEDED", `${forecast?.reason ?? "Stock looks fine."} Ask how many pieces if they still want to order.`);
+    }
+    const quantity = asked ?? forecast!.suggested_qty;
+    const verdict = policy.purchaseOrderCheck(quantity, supplier?.unit_cost ?? 0, supplier?.min_order_qty ?? 1, Boolean(supplier));
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const total = quantity * supplier!.unit_cost;
+    return {
+      args: { product_id: product.id, supplier_id: supplier!.id, quantity },
+      readback: `Send ${supplier!.name} a purchase order for ${quantity} × ${product.name} at ${inr(supplier!.unit_cost)} each, ${inr(total)} in total, expected in about ${supplier!.lead_time_days} days.${forecast ? ` Why: ${forecast.reason}` : ""}`,
+    };
+  },
+  async execute(client, ctx, args) {
+    const product = await findProduct(client, ctx.user.id, { product_id: args.product_id });
+    const supplier = await supplierFor(client, ctx.user.id, product.id);
+    if (!supplier || supplier.id !== args.supplier_id) throw new ToolError("STATE_CHANGED", "The supplier for this product has changed; nothing was ordered.");
+    const quantity = Number(args.quantity);
+    const verdict = policy.purchaseOrderCheck(quantity, supplier.unit_cost, supplier.min_order_qty, true);
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const poId = id("po");
+    const total = quantity * supplier.unit_cost;
+    await client.query(
+      `INSERT INTO purchase_orders (id, seller_id, supplier_id, product_id, product_name, quantity, unit_cost, total, state)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'sent')`,
+      [poId, ctx.user.id, supplier.id, product.id, product.name, quantity, supplier.unit_cost, total],
+    );
+    const receipt = await supplierConnector().sendPurchaseOrder({ poId, supplier, product: product.name, quantity, unitCost: supplier.unit_cost });
+    await client.query("UPDATE purchase_orders SET state = $2, supplier_ref = $3, eta = $4, updated_at = now() WHERE id = $1", [poId, receipt.state, receipt.supplierRef, receipt.eta]);
+    return {
+      data: { po_id: poId, supplier: supplier.name, product: product.name, quantity, total_inr: total, supplier_ref: receipt.supplierRef, eta: receipt.eta, simulated: receipt.simulated },
+      message: `Purchase order ${receipt.supplierRef} sent to ${supplier.name}: ${quantity} × ${product.name}, ${inr(total)}. ${receipt.state === "confirmed" ? "Confirmed" : "Sent"}, arriving around ${new Date(receipt.eta).toDateString()}.`,
+      undo: { kind: "po", po_id: poId },
+    };
+  },
+};
+
+writeTools.reroute_shipment = {
+  async prepare(client, ctx, args) {
+    const order = await loadOrder(client, ctx.user.id, args.order_no);
+    const { health, city } = await shipmentFor(client, order.id);
+    const verdict = policy.rerouteEligibility(order.status, Boolean(health?.stuck));
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const quotes = await courierConnector().quotes({ fromCity: city, currentCourier: health!.courier });
+    const wanted = policy.normalizeText(args.courier, 40).toLowerCase();
+    const quote = wanted ? quotes.find((q) => q.courier.toLowerCase().includes(wanted)) : quotes[0];
+    if (!quote) throw new ToolError("UNKNOWN_COURIER", `Available couriers: ${quotes.map((q) => q.courier).join(", ")}. Ask which one.`);
+    return {
+      args: { order_no: order.order_no, courier: quote.courier },
+      readback: `Re-book order ${order.order_no} (${order.buyer_name}) with ${quote.courier} ${quote.service}: about ${quote.eta_days} days, ${inr(quote.cost_inr)}. The ${health!.courier} parcel ${health!.awb} is stuck: ${health!.reason} ${order.buyer_name.split(/\s+/)[0]} gets the new tracking number.`,
+    };
+  },
+  async execute(client, ctx, args) {
+    const order = await loadOrder(client, ctx.user.id, args.order_no, true);
+    const { health, city } = await shipmentFor(client, order.id);
+    const verdict = policy.rerouteEligibility(order.status, Boolean(health?.stuck));
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const courier = courierConnector();
+    const quote = (await courier.quotes({ fromCity: city, currentCourier: health!.courier })).find((q) => q.courier === args.courier);
+    if (!quote) throw new ToolError("STATE_CHANGED", "That courier is no longer available; nothing was booked.");
+    const booking = await courier.rebook({ orderId: order.id, courier: quote.courier, quote });
+    await client.query("UPDATE orders SET courier = $2, awb = $3, eta = $4, updated_at = now() WHERE id = $1", [order.id, booking.courier, booking.awb, booking.eta]);
+    await client.query(
+      "INSERT INTO shipment_events (id, order_id, courier, awb, status, location, note) VALUES ($1,$2,$3,$4,'rebooked',$5,$6)",
+      [id("shp"), order.id, booking.courier, booking.awb, city, `Re-booked from ${health!.courier} ${health!.awb}${booking.simulated ? " (simulated courier)" : ""}`],
+    );
+    return {
+      data: { order_no: order.order_no, from: { courier: health!.courier, awb: health!.awb }, to: { courier: booking.courier, awb: booking.awb, eta: booking.eta }, cost_inr: quote.cost_inr, simulated: booking.simulated },
+      message: `Order ${order.order_no} re-booked with ${booking.courier}, tracking ${booking.awb}, expected ${new Date(booking.eta).toDateString()}.`,
+      notify: [{ orderId: order.id, channelId: order.channel_id, text: `Update · Your parcel was re-booked with ${booking.courier} to avoid a delay. New tracking: ${booking.awb}.` }],
+    };
+  },
+};
+
+async function refundFacts(client: pg.PoolClient, orderId: string) {
+  const row = (await client.query(
+    "SELECT EXISTS (SELECT 1 FROM refunds WHERE order_id = $1 AND state = 'issued') AS refunded",
+    [orderId],
+  )).rows[0];
+  return { refunded: Boolean(row?.refunded) };
+}
+
+/** Critical tier: executes only after a tap on Approve (see decideApproval). Money is simulated in the prototype. */
+writeTools.issue_refund = {
+  async prepare(client, ctx, args) {
+    const order = await loadOrder(client, ctx.user.id, args.order_no);
+    const { refunded } = await refundFacts(client, order.id);
+    const amount = args.amount === undefined || args.amount === null || args.amount === "" ? order.total : Math.round(Number(args.amount));
+    const verdict = policy.refundEligibility(order.status, order.total, amount, order.updated_at ?? order.created_at, refunded);
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const reason = policy.normalizeText(args.reason, 300) || "Seller-approved refund";
+    return {
+      args: { order_no: order.order_no, amount, reason },
+      readback: `Refund ${inr(amount)} to ${order.buyer_name} for order ${order.order_no} (paid ${inr(order.total)}). Reason: ${reason}. This is a critical action: tap Approve on screen. A spoken yes is not accepted for refunds.`,
+    };
+  },
+  async execute(client, ctx, args) {
+    const order = await loadOrder(client, ctx.user.id, args.order_no, true);
+    const { refunded } = await refundFacts(client, order.id);
+    const amount = Number(args.amount);
+    const verdict = policy.refundEligibility(order.status, order.total, amount, order.updated_at ?? order.created_at, refunded);
+    if (!verdict.ok) throw new ToolError(verdict.code, verdict.message);
+    const refundId = id("rfd");
+    await client.query("INSERT INTO refunds (id, order_id, seller_id, amount, reason) VALUES ($1,$2,$3,$4,$5)", [refundId, order.id, ctx.user.id, amount, args.reason]);
+    return {
+      data: { refund_id: refundId, order_no: order.order_no, amount_inr: amount, simulated: true },
+      message: `Refund of ${inr(amount)} recorded for order ${order.order_no} (simulated: no real money moved).`,
+      notify: [{ orderId: order.id, channelId: order.channel_id, text: `Update · A refund of ${inr(amount)} was issued for this order.` }],
+    };
+  },
+};
+
 // ---------------------------------------------------------------------------
 // Read tools
 // ---------------------------------------------------------------------------
@@ -445,6 +573,58 @@ const readTools: Record<string, ReadTool> = {
       data: { run_id: runId, reused },
       message: reused ? "The agent team is already working; its proposals will appear for approval." : "The agent team has started: the supervisor will plan and the specialists will propose actions for approval on the Agent network tab.",
     };
+  },
+  async forecast_stock(client, ctx, args) {
+    const all = await loadForecasts(client, ctx.user.id);
+    const term = policy.normalizeText(args.product_name, 80).toLowerCase();
+    const list = term ? all.filter((f) => f.name.toLowerCase().includes(term)) : all.filter((f) => f.status === "critical" || f.status === "warning");
+    const rows = (list.length ? list : all.slice(0, 3)).slice(0, 8).map((f) => ({
+      product: f.name, stock: f.stock, on_order: f.on_order, selling_per_day: f.velocity_per_day, trend: f.trend, days_left: f.days_of_cover,
+      runs_out: f.stockout_date?.slice(0, 10) ?? null, status: f.status, suggested_order: f.suggested_qty, supplier: f.supplier?.name ?? null, lead_time_days: f.lead_time_days, why: f.reason,
+    }));
+    const urgent = all.filter((f) => f.status === "critical").length;
+    return { data: { at_risk: rows }, message: urgent ? `${urgent} product(s) will run out before a restock could arrive.` : "No product is about to run out." };
+  },
+  async sla_risk(client, ctx) {
+    const { risks, handling } = await loadSlaRisks(client, ctx.user.id);
+    const flagged = risks.filter((r) => r.level !== "low");
+    return {
+      data: { typical_dispatch_hours: handling.hours, history_orders: handling.samples, orders: flagged.slice(0, 10).map((r) => ({ order_no: r.order_no, customer: r.customer, status: r.status, level: r.level, hours_left: r.hours_left, risk: r.risk, why: r.reason })) },
+      message: `${flagged.filter((r) => r.level === "late").length} late, ${flagged.filter((r) => r.level !== "late").length} at risk of missing the 24 h dispatch promise.`,
+    };
+  },
+  async track_shipment(client, ctx, args) {
+    if (args.order_no !== undefined && args.order_no !== null) {
+      const order = await loadOrder(client, ctx.user.id, args.order_no);
+      const { health, events } = await shipmentFor(client, order.id);
+      if (!health) return { data: { order_no: order.order_no, status: order.status }, message: `Order ${order.order_no} has no tracking yet (${order.status}).` };
+      return { data: { order_no: order.order_no, ...health, scans: events.slice(-5) }, message: `${health.courier} ${health.awb}: ${health.reason}` };
+    }
+    const all = await loadShipments(client, ctx.user.id);
+    return { data: { shipments: all.slice(0, 10).map(({ events: _e, ...rest }) => rest) }, message: `${all.filter((s) => s.stuck).length} stuck of ${all.length} parcel(s) in transit.` };
+  },
+  async chat_insights(client, ctx) {
+    const rows = (await client.query(
+      `SELECT kind, product_name, theme, suggestion, mentions, evidence, created_at FROM copilot_insights
+        WHERE seller_id = $1 AND run_id = (SELECT run_id FROM copilot_insights WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 1)
+        ORDER BY mentions DESC, kind`,
+      [ctx.user.id],
+    )).rows;
+    if (!rows.length) return { data: { insights: [] }, message: "No chat insights yet. Ask the seller to open the Co-pilot tab and press Refresh insights." };
+    return {
+      data: { as_of: rows[0].created_at, insights: rows.map((r) => ({ kind: r.kind, product: r.product_name, theme: r.theme, suggestion: r.suggestion, mentions: r.mentions, example: (r.evidence as Array<{ quote: string }>)[0]?.quote ?? null })) },
+      message: `${rows.length} theme(s) from customer chats.`,
+    };
+  },
+  async copilot_briefing(_client, ctx) {
+    // Dynamic import: the monitor itself calls this orchestrator.
+    const { scanSeller } = await import("../copilot/monitor");
+    const scan = await scanSeller(ctx.user, "voice");
+    return { data: { top: scan.alerts.slice(0, 4).map((a) => ({ severity: a.severity, title: a.title, why: a.detail, suggestion: a.suggestion?.label ?? null })), counts: scan.counts }, message: scan.alerts.length ? `${scan.alerts.length} thing(s) the co-pilot spotted.` : "The co-pilot sees nothing urgent." };
+  },
+  async list_purchase_orders(client, ctx) {
+    const rows = await listPurchaseOrders(client, ctx.user.id);
+    return { data: { purchase_orders: rows.slice(0, 8) }, message: `${rows.filter((r) => r.state === "sent" || r.state === "confirmed").length} purchase order(s) on the way.` };
   },
   async business_summary(client, ctx) {
     const data = await summaryFor(client, ctx.user.id);
@@ -490,6 +670,15 @@ export const toolDeclarations = [
   { name: "make_offer", description: "Offer the customer a special (lower) price on an order that has not shipped. Needs approval. The buyer accepts or declines in the order chat.", parameters: { type: "object", properties: { order_no: orderNo, amount: { type: "integer", description: "New total in rupees, lower than the current price." }, note: { type: "string" } }, required: ["order_no", "amount"] } },
   { name: "notify_delayed_customers", description: "Send ONE delay update to every delayed customer (or to the given order numbers) with a single approval. Draft a short, polite message without names; each customer's first name is added automatically.", parameters: { type: "object", properties: { message: { type: "string" }, order_nos: { type: "array", items: { type: "integer" } }, language: { type: "string" } }, required: ["message"] } },
   { name: "request_human_review", description: "Escalate when the request is unclear, out of policy or risky.", parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] } },
+  { name: "copilot_briefing", description: "What the proactive co-pilot sees right now: predicted stockouts, orders at risk of missing dispatch, stuck shipments, each with a suggested next step. Use at session start and for 'kya dhyan dena hai'.", parameters: { type: "object", properties: {} } },
+  { name: "forecast_stock", description: "Predict when products run out from recent sales, with days left, supplier lead time and a suggested order quantity. Give product_name for one product.", parameters: { type: "object", properties: { product_name: { type: "string" } } } },
+  { name: "sla_risk", description: "Open orders that are late or likely to miss the 24 h dispatch promise, with how many hours are left.", parameters: { type: "object", properties: {} } },
+  { name: "track_shipment", description: "Courier tracking for one shipped order (order_no), or every parcel in transit, including stuck ones.", parameters: { type: "object", properties: { order_no: orderNo } } },
+  { name: "chat_insights", description: "Themes from customer chats (complaints, requests, praise) per product, with suggestions.", parameters: { type: "object", properties: {} } },
+  { name: "list_purchase_orders", description: "Recent purchase orders to suppliers and their status.", parameters: { type: "object", properties: {} } },
+  { name: "create_purchase_order", description: "Restock from the product's supplier. Quantity is optional: without it the forecast's suggested quantity is used. Needs approval.", parameters: { type: "object", properties: { product_name: { type: "string" }, quantity: { type: "integer" } }, required: ["product_name"] } },
+  { name: "reroute_shipment", description: "Re-book a stuck parcel with another courier (optionally a named one). Only for shipped orders whose tracking shows them stuck. Needs approval.", parameters: { type: "object", properties: { order_no: orderNo, courier: { type: "string" } }, required: ["order_no"] } },
+  { name: "issue_refund", description: "Propose a refund for a delivered order (amount optional, default the full amount paid). CRITICAL: only the seller's tap on Approve can execute it; a spoken yes never does.", parameters: { type: "object", properties: { order_no: orderNo, amount: { type: "integer" }, reason: { type: "string" } }, required: ["order_no"] } },
   { name: "confirm_action", description: "Call ONLY after the seller clearly said yes to the exact read-back. Pass their words in user_words.", parameters: { type: "object", properties: { approval_id: { type: "string" }, user_words: { type: "string" } }, required: ["approval_id", "user_words"] } },
   { name: "reject_action", description: "Call when the seller says no or changes their mind about a pending approval.", parameters: { type: "object", properties: { approval_id: { type: "string" } }, required: ["approval_id"] } },
   { name: "undo_action", description: "Undo the seller's most recent undoable action, or a specific action_id.", parameters: { type: "object", properties: { action_id: { type: "string" } } } },
@@ -559,6 +748,25 @@ async function gatherFacts(ctx: Ctx, name: string, args: Record<string, unknown>
         facts.product = { name: String(args.product_name ?? ""), stock: 0, found: false };
       }
     }
+    if (name === "create_purchase_order") {
+      try {
+        const p = await findProduct(client, ctx.user.id, args);
+        const f = (await loadForecasts(client, ctx.user.id)).find((x) => x.product_id === p.id);
+        facts.product = { name: p.name, stock: Number(p.stock), found: true, matches: 1 };
+        if (f) facts.forecast = { status: f.status, reason: f.reason, suggested_qty: f.suggested_qty, supplier: f.supplier?.name ?? null, unit_cost: f.supplier?.unit_cost ?? 0, min_order_qty: f.supplier?.min_order_qty ?? 1 };
+      } catch {
+        facts.product = { name: String(args.product_name ?? ""), stock: 0, found: false };
+      }
+    }
+    if (name === "reroute_shipment" && facts.order?.owned) {
+      const o = await loadOrder(client, ctx.user.id, args.order_no);
+      const { health } = await shipmentFor(client, o.id);
+      facts.shipment = health ? { stuck: health.stuck, reason: health.reason, courier: health.courier, awb: health.awb } : null;
+    }
+    if (name === "issue_refund" && facts.order?.owned) {
+      const o = await loadOrder(client, ctx.user.id, args.order_no);
+      facts.refunded = (await refundFacts(client, o.id)).refunded;
+    }
     if (name === "notify_delayed_customers") {
       await ensureOrderNumbers(client, ctx.user.id);
       const rows = (await client.query(`${ORDER_SELECT} WHERE o.seller_id = $1`, [ctx.user.id])).rows.map(normRow);
@@ -611,7 +819,7 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
       const row = existing.rows[0];
       const ms = Date.now() - started;
       const actionId = await record(ctx, name, prepared.args, "awaiting_approval", { result: { duplicate_of: row.id }, ms });
-      return { ok: true, status: "awaiting_approval", actionId, message: `Already waiting for approval: ${row.readback}`, approval: { id: row.id, readback: row.readback, expiresAt: new Date(row.expires_at).toISOString(), duplicate: true }, latencyMs: ms };
+      return { ok: true, status: "awaiting_approval", actionId, message: `Already waiting for approval: ${row.readback}`, approval: { id: row.id, readback: row.readback, expiresAt: new Date(row.expires_at).toISOString(), duplicate: true, tier: policy.approvalTier(name) }, latencyMs: ms };
     }
     const approvalId = id("apr");
     const expiresAt = new Date(Date.now() + policy.APPROVAL_TTL_MS).toISOString();
@@ -623,8 +831,11 @@ export async function runTool(ctx: Ctx, name: string, rawArgs: unknown): Promise
       [approvalId, ctx.sessionId, ctx.user.id, name, JSON.stringify(prepared.args), hash, prepared.readback, expiresAt, actionId],
     );
     return {
-      ok: true, status: "awaiting_approval", actionId, approval: { id: approvalId, readback: prepared.readback, expiresAt },
-      message: `Read this back to the seller and wait for a clear yes: ${prepared.readback}`, latencyMs: ms, trace,
+      ok: true, status: "awaiting_approval", actionId, approval: { id: approvalId, readback: prepared.readback, expiresAt, tier: policy.approvalTier(name) },
+      message: policy.approvalTier(name) === "critical"
+        ? `Read this back, then ask the seller to TAP Approve on screen (a spoken yes cannot approve this): ${prepared.readback}`
+        : `Read this back to the seller and wait for a clear yes: ${prepared.readback}`,
+      latencyMs: ms, trace,
     };
   } catch (error) {
     if (error instanceof HttpError) throw error;
@@ -650,8 +861,12 @@ export async function decideApproval(
     return { ok: false, status, actionId, code, message, latencyMs: ms };
   };
 
-  if (decision === "approve" && via === "voice" && !policy.isAffirmative(utterance)) {
-    return fail("NOT_CONFIRMED", "That was not a clear yes. Ask again, or use the Approve button.");
+  if (decision === "approve" && via === "voice") {
+    const pending = (await getPool().query("SELECT tool FROM voiceops_approvals WHERE id = $1 AND user_id = $2", [approvalId, ctx.user.id])).rows[0];
+    if (pending && policy.approvalTier(pending.tool) === "critical") {
+      return fail("CRITICAL_NEEDS_TAP", "Refunds and other critical actions are approved only with a tap on the Approve button, never by voice. Ask the seller to tap Approve.");
+    }
+    if (!policy.isAffirmative(utterance)) return fail("NOT_CONFIRMED", "That was not a clear yes. Ask again, or use the Approve button.");
   }
   const decided = await getPool().query(
     `UPDATE voiceops_approvals SET state = $3, decided_via = $4, decided_at = now()
@@ -754,6 +969,11 @@ export async function undoAction(ctx: Ctx, actionId: string | null): Promise<Too
           if (!r.rowCount) throw new ToolError("STOCK_CHANGED", "Stock has changed since, so it cannot be reversed safely.");
           return "Stock change reversed.";
         }
+        case "po": {
+          const r = await client.query("UPDATE purchase_orders SET state = 'cancelled', updated_at = now() WHERE id = $1 AND seller_id = $2 AND state IN ('sent','confirmed')", [undo.po_id, ctx.user.id]);
+          if (!r.rowCount) throw new ToolError("STATE_CHANGED", "That purchase order has already been received, so it cannot be cancelled here.");
+          return "The purchase order is cancelled with the supplier.";
+        }
         default:
           throw new ToolError("NOT_UNDOABLE", "That action cannot be undone.");
       }
@@ -805,6 +1025,12 @@ export const ASSUMED_MANUAL_SECONDS: Record<string, number> = {
   make_offer: 120,
   /** One batch of delay updates; the manual way is one chat per delayed customer (about three in a typical day). */
   notify_delayed_customers: 450,
+  /** Check stock, call or message the supplier, agree quantity and price. */
+  create_purchase_order: 300,
+  /** Read tracking, call the courier, book another one, share the new tracking number. */
+  reroute_shipment: 480,
+  /** Look up the payment, issue the refund, tell the customer. */
+  issue_refund: 240,
 };
 export const BASELINE_TASKS = Object.keys(ASSUMED_MANUAL_SECONDS);
 const isMissingTable = (error: unknown) => (error as { code?: string })?.code === "42P01";

@@ -85,3 +85,51 @@ export function offerEligibility(status: string, base: number, amount: number, o
   if (openState === "open") return { ok: false, code: "OFFER_ALREADY_OPEN", message: "This order already has an open offer waiting for the customer." };
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// Co-pilot actions: purchase orders, courier re-routing, refunds
+// ---------------------------------------------------------------------------
+
+export const MAX_PO_QTY = 500;
+/** Purchase orders above this value need a human review instead of a voice approval. */
+export const MAX_PO_VALUE_INR = 100_000;
+export const REFUND_WINDOW_DAYS = 30;
+
+export function purchaseOrderCheck(quantity: number, unitCost: number, minOrderQty: number, hasSupplier: boolean): Verdict {
+  if (!hasSupplier) return no("NO_SUPPLIER", "No supplier is set up for this product. Add one on the Co-pilot tab, or ask a person.");
+  if (!Number.isInteger(quantity) || quantity <= 0) return no("BAD_QUANTITY", "Ask how many pieces to order (a whole number).");
+  if (quantity > MAX_PO_QTY) return no("OUT_OF_POLICY", `Orders above ${MAX_PO_QTY} pieces need a human review.`);
+  if (quantity < minOrderQty) return no("BELOW_MOQ", `This supplier's minimum order is ${minOrderQty} pieces.`);
+  if (quantity * unitCost > MAX_PO_VALUE_INR) return no("OUT_OF_POLICY", `That purchase is over INR ${MAX_PO_VALUE_INR.toLocaleString("en-IN")}; a person must approve it outside voice.`);
+  return ok;
+}
+
+export function rerouteEligibility(status: OrderStatus, stuck: boolean): Verdict {
+  if (status !== "shipped") return no("NOT_IN_TRANSIT", `Order is ${status}; only shipped parcels can be re-booked with another courier.`);
+  if (!stuck) return no("NOT_STUCK", "Tracking shows the parcel moving normally, so re-booking is not needed. Offer to share the tracking update instead.");
+  return ok;
+}
+
+/**
+ * Refunds are simulated (no money moves in the prototype) and still the most guarded action: delivered
+ * or completed orders within 30 days, at most the amount paid, one refund per order.
+ */
+export function refundEligibility(status: OrderStatus, paidTotal: number, amount: number, deliveredAt: string, alreadyRefunded: boolean, now = Date.now()): Verdict {
+  if (alreadyRefunded) return no("ALREADY_REFUNDED", "This order has already been refunded.");
+  if (status !== "delivered" && status !== "completed") return no("NOT_DELIVERED", `Order is ${status}. Cancel it instead if it has not shipped; refunds are for delivered orders.`);
+  if (!Number.isFinite(amount) || amount <= 0) return no("BAD_AMOUNT", "Ask for the refund amount in rupees.");
+  if (amount > paidTotal) return no("REFUND_TOO_HIGH", `The customer paid INR ${Math.round(paidTotal)}; a refund cannot be more than that.`);
+  if (hoursSince(deliveredAt, now) > REFUND_WINDOW_DAYS * 24) return no("OUT_OF_POLICY", `Delivered more than ${REFUND_WINDOW_DAYS} days ago; a person must decide.`);
+  return ok;
+}
+
+/**
+ * Approval tiers. "standard": a spoken yes that matches the read-back, or a tap.
+ * "critical": money leaves the business or many customers are affected; only a tap on Approve counts,
+ * because a spoken yes can be misheard in a noisy shop.
+ */
+export type ApprovalTier = "standard" | "critical";
+const CRITICAL_TOOLS = new Set(["issue_refund"]);
+export function approvalTier(tool: string): ApprovalTier {
+  return CRITICAL_TOOLS.has(tool) ? "critical" : "standard";
+}
