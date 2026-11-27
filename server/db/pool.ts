@@ -54,13 +54,16 @@ export function getPool(): pg.Pool {
   }
   if (!pool) {
     const isNeon = /neon\.tech/i.test(connectionString) || process.env.PGSSLMODE === "require";
+    // Cloud SQL on Cloud Run: a Unix socket under /cloudsql (host=/cloudsql/...). The connector encrypts
+    // the link itself, and the socket does not speak SSL.
+    const isUnixSocket = /[?&]host=(\/|%2F)/i.test(connectionString);
     pool = new Pool({
       connectionString,
       // Neon free / serverless: keep the pool small.
       max: Number(process.env.PG_POOL_MAX || 5),
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 20_000,
-      ssl: isNeon || process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : undefined,
+      ssl: !isUnixSocket && (isNeon || process.env.NODE_ENV === "production") ? { rejectUnauthorized: false } : undefined,
       ...(isNeon ? { lookup: neonIpv4Lookup } : {}),
     } as pg.PoolConfig);
     pool.on("error", (error) => {

@@ -6,6 +6,7 @@ import { checkDatabaseReady } from "../db/pool";
 import { nexconnConfigured } from "../nexconn";
 import { configuredKeys, keyHealth, slotName } from "../gemini-keys";
 import { geminiAttempts } from "./live";
+import { vertexAccessToken, vertexConfigured, vertexLocation, vertexProject } from "../vertex";
 
 export type PreflightCheck = { name: string; ok: boolean; detail: string };
 
@@ -33,10 +34,18 @@ export async function runPreflight(): Promise<{ ok: boolean; checks: PreflightCh
   const db = await checkDatabaseReady().catch(() => ({ ready: false }));
   checks.push({ name: "Database", ok: db.ready, detail: db.ready ? "connected" : "not reachable" });
 
+  if (vertexConfigured()) {
+    const token = await vertexAccessToken().catch(() => null);
+    checks.push({
+      name: "Vertex AI",
+      ok: Boolean(token),
+      detail: token ? `project ${vertexProject()}, region ${vertexLocation()}; voice and text go here first` : "no Google credentials found; falling back to API keys",
+    });
+  }
   const attempts = geminiAttempts();
   const models = [...new Set(attempts.map((a) => a.model))];
   const keys = configuredKeys();
-  if (!keys.length) checks.push({ name: "Gemini key", ok: false, detail: "GEMINI_API_KEY is not set" });
+  if (!keys.length && !vertexConfigured()) checks.push({ name: "Gemini key", ok: false, detail: "GEMINI_API_KEY is not set" });
   const health = new Map(keyHealth().map((h) => [h.slot, h]));
   const results = await Promise.all(keys.map(async ({ key, slot }) => ({ slot, ...(await keyCheck(key, models)) })));
   for (const r of results) {
@@ -53,7 +62,9 @@ export async function runPreflight(): Promise<{ ok: boolean; checks: PreflightCh
     });
   }
   checks.push({ name: "Chat service", ok: nexconnConfigured(), detail: nexconnConfigured() ? "configured" : "not configured; customer messages are recorded but not delivered" });
-  // Ready when the database is up and at least one Gemini key works (rotation covers the rest).
-  const required = checks.filter((c) => c.name === "Database" || c.name === "Gemini key rotation" || c.name === "Gemini key");
-  return { ok: required.every((c) => c.ok), checks };
+  // Ready when the database is up and Vertex or at least one Gemini key works.
+  const dbOk = checks.find((c) => c.name === "Database")?.ok ?? false;
+  const ai = checks.filter((c) => c.name === "Vertex AI" || c.name === "Gemini key rotation");
+  const aiOk = ai.some((c) => c.ok) && !checks.some((c) => c.name === "Gemini key" && !c.ok);
+  return { ok: dbOk && aiOk, checks };
 }

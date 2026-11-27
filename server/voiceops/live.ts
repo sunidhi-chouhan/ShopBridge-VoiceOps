@@ -16,6 +16,7 @@ import WebSocket, { WebSocketServer } from "ws";
 import type { UserRecord } from "../store-types";
 import * as orchestrator from "./orchestrator";
 import { failureFromClose, keyRotation, markKeyFailed, markKeyOk } from "../gemini-keys";
+import { vertexAccessToken, vertexConfigured, vertexHost, vertexLocation, vertexProject } from "../vertex";
 
 export type LiveDeps = {
   authenticate: (req: IncomingMessage) => Promise<UserRecord | null>;
@@ -129,15 +130,42 @@ export function attachLiveRelay(server: Server, deps: LiveDeps): WebSocketServer
  * tried on every key before the fallback model, because a key problem is far more common than a
  * retired model and switching keys is instant.
  */
-export function geminiAttempts(): Array<{ key: string; keyIndex: number; slot: number; model: string }> {
+export type LiveAttempt = { kind: "vertex" | "key"; key: string; keyIndex: number; slot: number; model: string; location?: string };
+
+/**
+ * With a Vertex token, Vertex AI in the configured region (default Mumbai) goes first: lowest
+ * latency from India and billed to the Google Cloud project. VERTEX_LIVE=0 turns that off.
+ */
+export function geminiAttempts(vertexToken: string | null = null): LiveAttempt[] {
   const keys = keyRotation();
   const primary = (process.env.GEMINI_LIVE_MODEL || "gemini-3.8-live").replace(/^models\//, "");
   const fallbacks = (process.env.GEMINI_LIVE_FALLBACK_MODELS ?? "gemini-3.1-flash-live-preview")
     .split(",").map((m) => m.trim().replace(/^models\//, "")).filter(Boolean);
   const models = [...new Set([primary, ...fallbacks])].slice(0, 2);
-  const out: Array<{ key: string; keyIndex: number; slot: number; model: string }> = [];
-  models.forEach((model) => keys.forEach(({ key, slot }) => out.push({ key, keyIndex: slot - 1, slot, model })));
+  const out: LiveAttempt[] = [];
+  if (vertexToken && vertexProject() && process.env.VERTEX_LIVE !== "0") {
+    const model = (process.env.VERTEX_LIVE_MODEL || primary).replace(/^models\//, "");
+    out.push({ kind: "vertex", key: vertexToken, keyIndex: -1, slot: 0, model, location: process.env.VERTEX_LIVE_LOCATION || vertexLocation() });
+  }
+  models.forEach((model) => keys.forEach(({ key, slot }) => out.push({ kind: "key", key, keyIndex: slot - 1, slot, model })));
   return out;
+}
+
+export function attemptLabel(a: LiveAttempt): string {
+  return a.kind === "vertex" ? `vertex/${a.location}/${a.model}` : a.model;
+}
+
+function openGemini(a: LiveAttempt): WebSocket {
+  if (a.kind === "vertex") {
+    return new WebSocket(`wss://${vertexHost(a.location!)}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent`, {
+      headers: { Authorization: `Bearer ${a.key}` },
+    });
+  }
+  return new WebSocket(`${GEMINI_URL()}?key=${encodeURIComponent(a.key)}`);
+}
+
+function setupModel(a: LiveAttempt): string {
+  return a.kind === "vertex" ? `projects/${vertexProject()}/locations/${a.location}/publishers/google/models/${a.model}` : `models/${a.model}`;
 }
 
 const dayKey = () => new Date().toISOString().slice(0, 10);
@@ -165,7 +193,7 @@ async function checkCaps(user: UserRecord, ip: string, active: Map<string, Brows
 }
 
 async function runSession(browser: Browser, request: IncomingMessage, user: UserRecord, deps: LiveDeps, active: Map<string, Browser>): Promise<void> {
-  const attempts = geminiAttempts();
+  const attempts = geminiAttempts(vertexConfigured() ? await vertexAccessToken().catch(() => null) : null);
   if (!attempts.length) {
     sendJson(browser, { type: "error", code: "AI_NOT_CONFIGURED", message: "Voice is not configured on this server." });
     return browser.close(1011, "not configured");
@@ -183,8 +211,8 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
   const sessionId = await orchestrator.startSession(user);
   const ctx: orchestrator.Ctx = { user, sessionId, notifier: deps.notifier };
   let attempt = 0;
-  let model = attempts[0].model;
-  let gemini = new WebSocket(`${GEMINI_URL()}?key=${encodeURIComponent(attempts[0].key)}`);
+  let model = attemptLabel(attempts[0]);
+  let gemini = openGemini(attempts[0]);
 
   const latencies: number[] = [];
   let inputBytes = 0;
@@ -232,7 +260,7 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
     g.send(
       JSON.stringify({
         setup: {
-          model: `models/${model}`,
+          model: setupModel(attempts[attempt]),
           generationConfig: { responseModalities: ["AUDIO"] },
           realtimeInputConfig: { automaticActivityDetection: vadConfig() },
           systemInstruction: { parts: [{ text: SYSTEM_PROMPT(user.name) }] },
@@ -274,7 +302,7 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
 
     if (msg.setupComplete) {
       ready = true;
-      markKeyOk(attempts[attempt].key);
+      if (attempts[attempt].kind === "key") markKeyOk(attempts[attempt].key);
       for (const q of queue.splice(0)) g.send(q);
       sendJson(browser, { type: "ready", sessionId, model });
       return;
@@ -347,12 +375,12 @@ async function runSession(browser: Browser, request: IncomingMessage, user: User
   const failed = (why: string, closeCode = 0, closeReason = "") => {
     if (g !== gemini || ended) return;
     // Rest this key so the next sessions start on a healthy one (a retired model is not the key's fault).
-    if (!ready && !/model|not found|not supported/i.test(closeReason)) markKeyFailed(attempts[attempt].key, failureFromClose(closeCode, closeReason));
+    if (!ready && attempts[attempt].kind === "key" && !/model|not found|not supported/i.test(closeReason)) markKeyFailed(attempts[attempt].key, failureFromClose(closeCode, closeReason));
     if (!ready && attempt < attempts.length - 1) {
       attempt += 1;
-      console.warn(`Gemini Live attempt ${attempt} failed (${why}); trying ${attempts[attempt].model} with key #${attempts[attempt].slot}`);
-      model = attempts[attempt].model;
-      gemini = new WebSocket(`${GEMINI_URL()}?key=${encodeURIComponent(attempts[attempt].key)}`);
+      console.warn(`Gemini Live attempt ${attempt} failed (${why}); trying ${attemptLabel(attempts[attempt])}${attempts[attempt].kind === "key" ? ` with key #${attempts[attempt].slot}` : ""}`);
+      model = attemptLabel(attempts[attempt]);
+      gemini = openGemini(attempts[attempt]);
       bind(gemini);
       return;
     }

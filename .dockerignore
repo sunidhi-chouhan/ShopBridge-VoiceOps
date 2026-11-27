@@ -1,0 +1,14 @@
+node_modules
+dist
+data
+backups
+recordings
+real-voice-clips
+video-build
+slides-assets
+.env
+.env.*
+.git
+.claude
+.context
+*.log
