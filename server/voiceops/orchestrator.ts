@@ -127,7 +127,14 @@ async function loadOrder(client: pg.PoolClient, sellerId: string, orderNo: unkno
     `${ORDER_SELECT} WHERE o.seller_id = $1 AND n.order_no = $2 ${lock ? "FOR UPDATE OF o" : ""}`,
     [sellerId, no],
   );
-  if (!res.rows[0]) throw new ToolError("ORDER_NOT_FOUND", `No order ${no} found for this seller. Ask them to confirm the number.`);
+  if (!res.rows[0]) {
+    // Speech often mishears one digit (1053 → 1353). Offer the near miss, but never act on it unasked.
+    const mine = (await client.query("SELECT n.order_no FROM voiceops_order_numbers n JOIN orders o ON o.id = n.order_id WHERE o.seller_id = $1", [sellerId])).rows.map((r) => Number(r.order_no));
+    const near = policy.nearOrderNumbers(no, mine).slice(0, 3);
+    throw new ToolError("ORDER_NOT_FOUND", near.length
+      ? `No order ${no} found. Closest real order${near.length > 1 ? "s" : ""}: ${near.join(", ")}. Ask "did you mean ${near[0]}?" and wait for their answer; do not act on ${near[0]} until they confirm.`
+      : `No order ${no} found for this seller. Ask them to confirm the number.`);
+  }
   return normRow(res.rows[0]);
 }
 
@@ -154,15 +161,19 @@ async function findProduct(client: pg.PoolClient, sellerId: string, args: Record
   }
   const term = policy.normalizeText(args.product_name, 80).toLowerCase();
   if (!term) throw new ToolError("MISSING_PRODUCT", "Ask which product they mean.");
-  const res = await client.query(
-    `SELECT id, name, stock FROM products WHERE seller_id = $1 AND lower(name) LIKE $2 ORDER BY name ${lock ? "FOR UPDATE" : ""}`,
-    [sellerId, `%${term.replace(/[%_]/g, "")}%`],
-  );
-  if (res.rows.length === 0) throw new ToolError("PRODUCT_NOT_FOUND", `No product matching "${term}". Ask them to name it again.`);
-  if (res.rows.length > 1) {
-    throw new ToolError("AMBIGUOUS_PRODUCT", `Several products match: ${res.rows.map((r) => r.name).join(", ")}. Ask which one.`);
+  const all = (await client.query("SELECT id, name, stock FROM products WHERE seller_id = $1 ORDER BY name", [sellerId])).rows as Array<{ id: string; name: string; stock: number }>;
+  // Exact substring first; spoken spellings ("saree", "jhumke") fall back to a sound-alike match.
+  let hits = all.filter((r) => r.name.toLowerCase().includes(term));
+  if (hits.length !== 1) {
+    const fuzzy = policy.matchProducts(term, all);
+    if (fuzzy.length === 1 || (!hits.length && fuzzy.length)) hits = fuzzy;
   }
-  return res.rows[0] as { id: string; name: string; stock: number };
+  if (hits.length === 0) throw new ToolError("PRODUCT_NOT_FOUND", `No product matching "${term}". Products: ${all.map((r) => r.name).join(", ")}. Ask which one they mean.`);
+  if (hits.length > 1) {
+    throw new ToolError("AMBIGUOUS_PRODUCT", `Several products match: ${hits.map((r) => r.name).join(", ")}. Ask which one.`);
+  }
+  if (!lock) return hits[0];
+  return (await client.query("SELECT id, name, stock FROM products WHERE id = $1 AND seller_id = $2 FOR UPDATE", [hits[0].id, sellerId])).rows[0] as { id: string; name: string; stock: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +591,7 @@ const readTools: Record<string, ReadTool> = {
   async forecast_stock(client, ctx, args) {
     const all = await loadForecasts(client, ctx.user.id);
     const term = policy.normalizeText(args.product_name, 80).toLowerCase();
-    const list = term ? all.filter((f) => f.name.toLowerCase().includes(term)) : all.filter((f) => f.status === "critical" || f.status === "warning");
+    const list = term ? all.filter((f) => f.name.toLowerCase().includes(term) || policy.productMatchScore(term, f.name) >= 0.5) : all.filter((f) => f.status === "critical" || f.status === "warning");
     const rows = (list.length ? list : all.slice(0, 3)).slice(0, 8).map((f) => ({
       product: f.name, stock: f.stock, on_order: f.on_order, selling_per_day: f.velocity_per_day, trend: f.trend, days_left: f.days_of_cover,
       runs_out: f.stockout_date?.slice(0, 10) ?? null, status: f.status, suggested_order: f.suggested_qty, supplier: f.supplier?.name ?? null, lead_time_days: f.lead_time_days, why: f.reason,
@@ -663,7 +674,7 @@ export const toolDeclarations = [
   { name: "business_summary", description: "Counts of orders awaiting dispatch, delayed orders, low stock, open returns and pending approvals.", parameters: { type: "object", properties: {} } },
   { name: "list_orders", description: "List the seller's orders. Use delayed_only for orders not dispatched within 24 hours.", parameters: { type: "object", properties: { status: { type: "string", enum: [...ORDER_STATUSES] }, delayed_only: { type: "boolean" }, limit: { type: "integer" } } } },
   { name: "get_order", description: "Details of one order, including any return.", parameters: { type: "object", properties: { order_no: orderNo }, required: ["order_no"] } },
-  { name: "list_low_stock", description: "Products at or below a stock threshold (default 5).", parameters: { type: "object", properties: { threshold: { type: "integer" } } } },
+  { name: "list_low_stock", description: "Raw stock counts at or below a threshold (default 5). For 'what will run out' questions use forecast_stock instead: it predicts from sales.", parameters: { type: "object", properties: { threshold: { type: "integer" } } } },
   { name: "update_order_status", description: "Move an order one step forward: packed, shipped or delivered. Needs seller approval; read the returned readback aloud and wait.", parameters: { type: "object", properties: { order_no: orderNo, status: { type: "string", enum: ["packed", "shipped", "delivered"] }, courier: { type: "string" }, awb: { type: "string" } }, required: ["order_no", "status"] } },
   { name: "cancel_order", description: "Cancel an order that is not yet shipped. Fails for shipped or delivered orders; then offer to message the customer instead.", parameters: { type: "object", properties: { order_no: orderNo }, required: ["order_no"] } },
   { name: "create_return", description: "Start a return for a delivered order inside the 7-day window. Never refunds money. The reason is optional; do not ask for one if the seller did not give it.", parameters: { type: "object", properties: { order_no: orderNo, reason: { type: "string", description: "Optional. Defaults to a seller-initiated return." } }, required: ["order_no"] } },

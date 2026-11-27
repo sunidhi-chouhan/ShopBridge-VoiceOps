@@ -58,11 +58,14 @@ export function stockChange(current: number, delta: number): Verdict {
 const word = (alts: string) => new RegExp(`(?<![\\p{L}\\p{M}])(?:${alts})(?![\\p{L}\\p{M}])`, "iu");
 const YES = word(
   "haan|han|ha|haa|yes|yeah|yep|ok|okay|theek|thik|sahi|kar\\s*do|karo|confirm|confirmed|approve|bilkul|done|sure|go ahead|aage badho|jee|ji|" +
-    "हाँ|हां|हा|जी|ठीक|सही|कर\\s*दो|करो|कर\\s*दीजिए|ओके|बिल्कुल|बिलकुल|कन्फर्म|अप्रूव",
+    "हाँ|हां|हा|जी|ठीक|सही|कर\\s*दो|करो|कर\\s*दीजिए|ओके|बिल्कुल|बिलकुल|कन्फर्म|अप्रूव|" +
+    // Tamil and Tanglish: aama / sari / seri / anuppunga (send) / pannunga (do it)
+    "aama|aamaa|aamam|sari|seri|anuppunga|pannunga|podunga|ஆமா|ஆமாம்|சரி|ஓகே|அனுப்புங்க|அனுப்பு|பண்ணுங்க|போடுங்க",
 );
 const NO = word(
   "nahi|nahin|nhi|no|mat|stop|ruko|ruk|wait|cancel|na|don'?t|galat|wrong|" +
-    "नहीं|नही|मत|रुको|रुक|वेट|कैंसल|गलत|ना",
+    "नहीं|नही|मत|रुको|रुक|वेट|कैंसल|गलत|ना|" +
+    "illa|illai|venda|vendam|venaam|niruthu|irunga|இல்ல|இல்லை|வேண்டாம்|வேணாம்|நிறுத்து|இருங்க",
 );
 
 /** Spoken confirmation must be clearly affirmative and contain no negation. */
@@ -169,4 +172,55 @@ export function approvalTierFor(tool: string, args: Record<string, unknown> = {}
 
 export function approvalTier(tool: string, args: Record<string, unknown> = {}): ApprovalTier {
   return approvalTierFor(tool, args).tier;
+}
+
+
+// ---------------------------------------------------------------------------
+// Spoken product names: tolerant to Hinglish spellings and plurals
+// ---------------------------------------------------------------------------
+
+/**
+ * A rough sound key for one word, so "saree", "sari" and "saari", or "jhumke", "jhumka" and "jhumkas"
+ * compare equal: lower case, long vowels shortened, aspirated consonants flattened, doubled letters
+ * collapsed, trailing plural/inflection letters dropped.
+ */
+export function soundKey(word: string): string {
+  let w = word.normalize("NFKD").toLowerCase().replace(/[^a-z]/g, "");
+  w = w.replace(/ee|ii/g, "i").replace(/aa/g, "a").replace(/oo|uu/g, "u").replace(/ph/g, "f").replace(/w/g, "v").replace(/z/g, "j");
+  w = w.replace(/([kgcjtdpb])h/g, "$1").replace(/sh/g, "s");
+  w = w.replace(/(.)\1+/g, "$1");
+  w = w.replace(/(es|s)$/, "").replace(/[aeiouy]+$/, "");
+  return w;
+}
+
+const STOP = new Set(["ka", "ki", "ke", "the", "of", "a", "and", "set", "two", "ml", "wala", "wali", "vala", "stock"]);
+const keys = (text: string) => text.split(/[^\p{L}\p{N}]+/u).map(soundKey).filter((k) => k.length >= 2 && !STOP.has(k));
+
+/** How well a spoken term matches a product name: share of the term's words found in the name (0..1). */
+export function productMatchScore(term: string, name: string): number {
+  const want = keys(term);
+  if (!want.length) return 0;
+  const have = keys(name);
+  const hit = want.filter((k) => have.some((h) => h === k || (k.length >= 4 && (h.startsWith(k) || k.startsWith(h))))).length;
+  return hit / want.length;
+}
+
+/** Best matches for a spoken product term: every product with the top score (if it is at least 0.5). */
+export function matchProducts<T extends { name: string }>(term: string, products: T[]): T[] {
+  const scored = products.map((p) => ({ p, s: productMatchScore(term, p.name) }));
+  const top = Math.max(0, ...scored.map((x) => x.s));
+  if (top < 0.5) return [];
+  return scored.filter((x) => x.s === top).map((x) => x.p);
+}
+
+/** Order numbers one digit away from what was heard (e.g. 1353 → 1053), for "did you mean" prompts. */
+export function nearOrderNumbers(heard: number, existing: number[]): number[] {
+  const h = String(heard);
+  return existing.filter((n) => {
+    const e = String(n);
+    if (e.length !== h.length || e === h) return false;
+    let diff = 0;
+    for (let i = 0; i < e.length; i++) if (e[i] !== h[i]) diff++;
+    return diff === 1;
+  });
 }

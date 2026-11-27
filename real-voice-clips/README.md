@@ -68,7 +68,7 @@ Record these in an ordinary room, with a fan or light background noise. Later I 
 | File | Say this | What should happen |
 |---|---|---|
 | `T01_delay` | "Order 1051 enna aachu? Customer-ku delay message anuppunga." / "ஆர்டர் 1051 என்ன ஆச்சு? கஸ்டமருக்கு டிலே மெசேஜ் அனுப்புங்க." | Status + delay message proposal |
-| `T02_stock` | "Saree stock evlo irukku? Anju add pannunga." / "சாரி ஸ்டாக் எவ்வளவு இருக்கு? அஞ்சு ஆட் பண்ணுங்க." | Reads stock, proposes +5 |
+| `T02_stock` | "Saree stock evlo irukku? Anju add pannunga." (say "saree": in Tamil "சாரி" also means "sorry") | Reads stock, proposes +5 |
 | `T03_correction` | "Order 1051-a pack pannunga… illa illa, 1052." / "ஆர்டர் 1051-ஐ பேக் பண்ணுங்க… இல்ல இல்ல, 1052." | Packs **1052** only |
 | `T04_yes` | "Aama, anuppunga." / "ஆமா, அனுப்புங்க." | Approves |
 
