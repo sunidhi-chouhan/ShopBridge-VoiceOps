@@ -13,6 +13,7 @@
 import type { HelpRequestView, Language, OrderView } from "../shared/types";
 import { HttpError } from "./errors";
 import { failureFromStatus, hasGeminiKey, keyRotation, markKeyFailed, markKeyOk } from "./gemini-keys";
+import { vertexAccessToken, vertexConfigured, vertexGenerateUrl, vertexProject, vertexTextTargets } from "./vertex";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const TIMEOUT_MS = 20_000;
@@ -29,7 +30,7 @@ const LANGUAGE_NAMES: Record<Language, string> = {
 export type TranscriptLine = { role: "buyer" | "seller" | "support" | "event"; text: string };
 
 export function assistConfigured(): boolean {
-  return hasGeminiKey();
+  return vertexConfigured() || hasGeminiKey();
 }
 
 export function parseTranscript(value: unknown): TranscriptLine[] {
@@ -142,7 +143,7 @@ export async function generateText(input: {
 }): Promise<{ text: string; model: string }> {
   // Every configured key, starting at the next one in the rotation; resting keys go last.
   const keys = keyRotation();
-  if (!keys.length) throw new HttpError(503, "AI_NOT_CONFIGURED", `AI ${input.purpose} is not configured on this server.`);
+  if (!keys.length && !vertexConfigured()) throw new HttpError(503, "AI_NOT_CONFIGURED", `AI ${input.purpose} is not configured on this server.`);
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: input.system }] },
     contents: [{ role: "user", parts: [...(input.image ? [{ inlineData: { mimeType: input.image.mime, data: input.image.data } }] : []), { text: input.prompt }] }],
@@ -152,8 +153,29 @@ export async function generateText(input: {
       ...(input.json ? { responseMimeType: "application/json" } : {}),
     },
   });
-  let attempts = 0;
   let sawEmpty = false;
+  // Vertex AI first (Google Cloud project, regional endpoint); API keys are the fallback.
+  const project = vertexProject();
+  const token = project ? await vertexAccessToken() : null;
+  if (project && token) {
+    for (const target of vertexTextTargets()) {
+      let response: Response;
+      try {
+        response = await fetchWithTimeout(vertexGenerateUrl(project, target.location, target.model), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body,
+        });
+      } catch {
+        continue;
+      }
+      if (!response.ok) continue;
+      const text = extractText(await response.json().catch(() => null));
+      if (text) return { text, model: `vertex/${target.model}` };
+      sawEmpty = true;
+    }
+  }
+  let attempts = 0;
   const budget = Math.min(MAX_ATTEMPTS + keys.length * 4, 32);
   for (const { key } of keys) {
     for (const model of await candidateModels(key)) {
@@ -177,16 +199,19 @@ export async function generateText(input: {
       // 429 (that model's quota), 404 (retired) or 5xx (busy): quotas are per model, so try the next model.
       if (!response.ok) continue;
       markKeyOk(key);
-      const json = (await response.json().catch(() => null)) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      } | null;
-      const text = (json?.candidates?.[0]?.content?.parts ?? []).map((part) => part.text ?? "").join("").trim();
+      const text = extractText(await response.json().catch(() => null));
       if (text) return { text, model };
       sawEmpty = true;
     }
   }
   if (sawEmpty) throw new HttpError(502, "AI_EMPTY", "The AI service returned no answer. Try again.");
   throw new HttpError(502, "AI_UNAVAILABLE", `Gemini is busy or unavailable right now, so the ${input.purpose} could not be written. Try again in a minute.`);
+}
+
+/** Concatenated text of the first candidate; thought parts are skipped. */
+function extractText(json: unknown): string {
+  const parts = (json as { candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }> } | null)?.candidates?.[0]?.content?.parts ?? [];
+  return parts.filter((part) => !part.thought).map((part) => part.text ?? "").join("").trim();
 }
 
 export async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {

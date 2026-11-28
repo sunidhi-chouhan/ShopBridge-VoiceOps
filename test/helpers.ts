@@ -9,6 +9,8 @@ process.env.NODE_ENV = "test";
 process.env.SHOPBRIDGE_DEMO_PASSWORD = "test-demo-password";
 delete process.env.NEXCONN_APP_KEY;
 delete process.env.NEXCONN_APP_SECRET;
+delete process.env.GOOGLE_CLOUD_PROJECT; // Vertex only when a test opts in
+delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 
 export const DEFAULT_TEST_DATABASE_URL = "postgresql://postgres:test@127.0.0.1:55432/shopbridge_test";
 

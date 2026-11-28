@@ -40,8 +40,13 @@ export class LiveClient {
   private micOn = false;
   private bargeTimer: number | null = null;
   private loudTicks = 0;
+  private holding = false;
 
-  constructor(private onEvent: (event: LiveEvent) => void) {}
+  /**
+   * holdToTalk: for noisy shops. Audio goes to the agent only while the talk button is held, and the start and
+   * end of each turn come from the button, so a TV or market chatter can neither start a turn nor cut the agent off.
+   */
+  constructor(private onEvent: (event: LiveEvent) => void, readonly holdToTalk = false) {}
 
   get open(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
@@ -57,7 +62,7 @@ export class LiveClient {
     this.outAnalyser.fftSize = 256;
     this.outAnalyser.connect(this.ctx.destination);
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${proto}//${window.location.host}/api/voiceops/live`);
+    const ws = new WebSocket(`${proto}//${window.location.host}/api/voiceops/live${this.holdToTalk ? "?mode=ptt" : ""}`);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
     await new Promise<void>((resolve, reject) => {
@@ -88,12 +93,12 @@ export class LiveClient {
     this.micAnalyser.fftSize = 256;
     this.micNode = new AudioWorkletNode(this.ctx, "voiceops-mic");
     this.micNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      if (this.open) this.ws!.send(event.data);
+      if (this.open && (!this.holdToTalk || this.holding)) this.ws!.send(event.data);
     };
     source.connect(this.micAnalyser);
     source.connect(this.micNode);
     this.micOn = true;
-    this.startBargeMonitor();
+    if (!this.holdToTalk) this.startBargeMonitor();
   }
 
   stopMic(): void {
@@ -107,6 +112,21 @@ export class LiveClient {
     this.stream = null;
     this.micAnalyser = null;
     if (this.open) this.send({ type: "audio_end" });
+  }
+
+  /** Hold-to-talk: button pressed. Silences the agent (the seller is taking the turn) and opens the turn. */
+  holdStart(): void {
+    if (!this.holdToTalk || this.holding || !this.open) return;
+    this.holding = true;
+    this.flush();
+    this.send({ type: "activity_start" });
+  }
+
+  /** Hold-to-talk: button released. Closes the turn; the agent answers now. */
+  holdEnd(): void {
+    if (!this.holdToTalk || !this.holding) return;
+    this.holding = false;
+    this.send({ type: "activity_end" });
   }
 
   /** Ask the agent for a short proactive briefing (once per session). */

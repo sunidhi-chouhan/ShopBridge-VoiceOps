@@ -30,3 +30,10 @@ coverage/
 recordings/
 video-build/
 __pycache__/
+
+# Real voice test clips (personal voice; only the README is tracked)
+real-voice-clips/*
+!real-voice-clips/README.md
+
+# Synthesised speech cache for the validation lab
+lab-cache/

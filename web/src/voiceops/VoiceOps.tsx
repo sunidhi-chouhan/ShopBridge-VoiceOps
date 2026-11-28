@@ -24,8 +24,9 @@ import { Attention, DashHero, DashSection, EconomicsTiles, KpiRow, LatencyChart,
 import { AiStory } from "../ai/AiStory";
 import { TraceView } from "../ai/TraceView";
 import { AgentNetwork } from "../ai/AgentNetwork";
+import { CopilotTab } from "./Copilot";
 
-type Tab = "agent" | "team" | "how" | "approvals" | "activity" | "overview";
+type Tab = "agent" | "copilot" | "team" | "how" | "approvals" | "activity" | "overview";
 
 const TOOL_LABEL: Record<string, string> = {
   business_summary: "Business summary",
@@ -41,6 +42,15 @@ const TOOL_LABEL: Record<string, string> = {
   make_offer: "Offer special price",
   run_agent_team: "Ask the agent team",
   notify_delayed_customers: "Notify delayed customers",
+  copilot_briefing: "Co-pilot briefing",
+  forecast_stock: "Forecast stock",
+  sla_risk: "Check dispatch risk",
+  track_shipment: "Track shipment",
+  chat_insights: "Chat insights",
+  list_purchase_orders: "Purchase orders",
+  create_purchase_order: "Order from supplier",
+  reroute_shipment: "Re-book courier",
+  issue_refund: "Refund (tap only)",
   undo_action: "Undo",
 };
 const label = (tool: string) => TOOL_LABEL[tool] ?? tool.replace(/_/g, " ");
@@ -175,7 +185,7 @@ function ActionCard({
             <Button onClick={() => onApprove(item.approval!.id)} disabled={busy}>Approve</Button>
             <Button variant="secondary" onClick={() => onReject(item.approval!.id)} disabled={busy}>Cancel</Button>
           </div>
-          <p className="vo-hint">Or just say “haan, kar do” / “nahi”.</p>
+          <p className="vo-hint">{item.approval!.tier === "critical" ? "Critical action: only a tap on Approve counts. A spoken yes is not accepted." : "Or just say “haan, kar do” / “nahi”."}</p>
         </div>
       ) : item.message ? (
         <p className="vo-msg">{item.message}</p>
@@ -249,8 +259,28 @@ function AgentTab({ agent, refresh }: { agent: ReturnType<typeof useVoiceAgent>;
             )}
             {agent.model ? <span className="vo-model">{agent.model}</span> : null}
           </div>
+          {live && agent.holdToTalk ? (
+            <button
+              type="button"
+              className={`vo-hold${agent.holding ? " is-holding" : ""}`}
+              onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); agent.holdStart(); }}
+              onPointerUp={() => agent.holdEnd()}
+              onPointerCancel={() => agent.holdEnd()}
+              onKeyDown={(e) => { if ((e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); agent.holdStart(); } }}
+              onKeyUp={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); agent.holdEnd(); } }}
+              aria-pressed={agent.holding}
+            >
+              {agent.holding ? "Listening… release when done" : "Hold to talk"}
+            </button>
+          ) : null}
+          <label className="vo-noisy">
+            <input type="checkbox" checked={agent.holdToTalk} onChange={(e) => agent.setHoldToTalk(e.target.checked)} />
+            <span>Noisy shop (TV, market): hold to talk</span>
+          </label>
           {agent.error ? <p className="vo-error" role="alert">{agent.error}</p> : null}
-          <p className="vo-hint">Speak Hindi, Hinglish, Tamil or English. The AI looks things up, proposes the change and waits for your yes. Interrupt it any time.</p>
+          <p className="vo-hint">{agent.holdToTalk
+            ? "Hold the button while you speak and let go when done. Background voices cannot start a turn or cut the agent off."
+            : "Speak Hindi, Hinglish, Tamil or English. The AI looks things up, proposes the change and waits for your yes. Interrupt it any time."}</p>
         </Card>
 
         <Card variant="form" className="vo-convo">
@@ -313,6 +343,7 @@ function ApprovalsTab({ tick, refresh }: { tick: number; refresh: () => void }) 
         <li key={a.id} className="vo-row">
           <div>
             <strong>{label(a.tool)}</strong> <Badge tone={a.state === "pending" ? "warning" : a.state === "executed" ? "success" : "neutral"}>{a.state === "executed" ? "approved & done" : a.state}</Badge>
+            {a.tier === "critical" ? <> <Badge tone="danger">Critical · tap only</Badge></> : null}
             <p className="vo-msg">{a.readback}</p>
             <p className="vo-hint">{new Date(a.created_at).toLocaleString()}{a.decided_via ? ` · decided by ${a.decided_via}` : ""}</p>
           </div>
@@ -489,7 +520,7 @@ export function VoiceOps() {
     // Each tab starts at its top, even when the previous tab was scrolled far down.
     window.requestAnimationFrame(() => tabBar.current?.scrollIntoView({ block: "nearest" }));
   };
-  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["team", "Agent network"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
+  const tabs: Array<[Tab, string]> = [["agent", "Voice agent"], ["copilot", "Co-pilot"], ["team", "Agent network"], ["how", "How the AI works"], ["approvals", pending ? `Approvals (${pending})` : "Approvals"], ["activity", "Activity"], ["overview", "Overview"]];
   return (
     <div className="vo-page">
       <div className="vo-tabs" role="tablist" ref={tabBar}>
@@ -498,6 +529,7 @@ export function VoiceOps() {
         ))}
       </div>
       <div hidden={tab !== "agent"}><AgentTab agent={agent} refresh={refresh} /></div>
+      {tab === "copilot" ? <CopilotTab tick={tick} refresh={refresh} /> : null}
       {tab === "team" ? <AgentNetwork refresh={refresh} /> : null}
       {tab === "how" ? (
         <AiStory

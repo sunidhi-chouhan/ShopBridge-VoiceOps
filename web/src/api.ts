@@ -434,6 +434,7 @@ export type VoiceAction = {
 export type VoiceApproval = {
   id: string;
   tool: string;
+  tier?: "standard" | "critical";
   args: Record<string, unknown>;
   readback: string;
   state: "pending" | "approved" | "rejected" | "expired" | "executed";
@@ -480,4 +481,64 @@ export function voicePreflight(): Promise<{ ok: boolean; checks: Array<{ name: s
 }
 export function resetVoiceDemo(): Promise<{ orders: number[]; rooms: string[] }> {
   return request("/api/voiceops/demo/reset", { method: "POST", body: "{}" });
+}
+
+// ---- Proactive co-pilot ----
+
+export type CopilotSuggestion = { tool: string; args: Record<string, unknown>; label: string };
+export type CopilotAlert = {
+  id: string;
+  kind: "stockout" | "sla_risk" | "stuck_shipment";
+  subject: string;
+  severity: "critical" | "warning" | "info";
+  title: string;
+  detail: string;
+  suggestion: CopilotSuggestion | null;
+  state: "open" | "proposed" | "resolved" | "dismissed";
+  approval_id: string | null;
+  approval_state: "pending" | "approved" | "rejected" | "expired" | "executed" | null;
+  updated_at: string;
+};
+export type CopilotForecast = {
+  product_id: string; name: string; stock: number; on_order: number; velocity_per_day: number; trend: "rising" | "falling" | "steady";
+  units_28d: number; days_of_cover: number | null; stockout_date: string | null; lead_time_days: number; safety_stock: number;
+  reorder_point: number; suggested_qty: number; status: "critical" | "warning" | "ok" | "no_demand"; reason: string;
+  supplier: { id: string; name: string; lead_time_days: number; unit_cost: number; min_order_qty: number } | null;
+};
+export type CopilotRisk = { order_no: number; order_id: string; customer: string; items: string[]; status: string; age_hours: number; hours_left: number; risk: number; level: "late" | "high" | "medium" | "low"; reason: string };
+export type CopilotShipment = {
+  order_no: number; order_id: string; customer: string; courier: string; awb: string; last_status: string; last_location: string | null;
+  hours_since_scan: number; stuck: boolean; reason: string;
+  events: Array<{ courier: string; awb: string; status: string; location: string | null; note: string | null; at: string }>;
+};
+export type CopilotInsight = {
+  kind: "complaint" | "request" | "praise" | "question"; product_name: string | null; theme: string; suggestion: string | null; mentions: number;
+  evidence: Array<{ ref: string; label: string; quote: string; translation?: string }>;
+};
+export type CopilotOverview = {
+  alerts: CopilotAlert[];
+  forecasts: CopilotForecast[];
+  sla: CopilotRisk[];
+  handling: { hours: number | null; samples: number };
+  shipments: CopilotShipment[];
+  purchase_orders: Array<{ id: string; product_name: string; quantity: number; total: number; state: string; supplier_ref: string | null; eta: string | null; created_at: string; supplier: string }>;
+  insights: { as_of: string | null; model: string | null; items: CopilotInsight[] };
+  last_scan: { trigger: string; raised: number; resolved: number; ms: number; created_at: string } | null;
+};
+export type CopilotProposal = VoiceDecision & { approval?: { id: string; readback: string; expiresAt: string; tier?: "standard" | "critical" } };
+
+export function copilotOverview(): Promise<CopilotOverview> {
+  return request("/api/voiceops/copilot");
+}
+export function copilotScan(): Promise<{ raised: number; resolved: number; ms: number }> {
+  return request("/api/voiceops/copilot/scan", { method: "POST", body: "{}" });
+}
+export function proposeCopilotAlert(id: string): Promise<CopilotProposal> {
+  return request(`/api/voiceops/copilot/alerts/${encodeURIComponent(id)}/propose`, { method: "POST", body: "{}" });
+}
+export function dismissCopilotAlert(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/voiceops/copilot/alerts/${encodeURIComponent(id)}/dismiss`, { method: "POST", body: "{}" });
+}
+export function refreshCopilotInsights(conversations: Array<{ orderId: string; transcript: Array<{ role: string; text: string }> }>): Promise<{ insights: CopilotInsight[]; sources: number; model: string | null }> {
+  return request("/api/voiceops/copilot/insights", { method: "POST", body: JSON.stringify({ conversations }) });
 }

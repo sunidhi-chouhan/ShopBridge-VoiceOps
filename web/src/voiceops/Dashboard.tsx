@@ -7,7 +7,7 @@ import { unitEconomics } from "./Economics";
 import { useVoice } from "./VoiceContext";
 
 type Data = VoiceOverview;
-type Tab = "agent" | "team" | "how" | "approvals" | "activity" | "overview";
+type Tab = "agent" | "copilot" | "team" | "how" | "approvals" | "activity" | "overview";
 
 const greeting = () => {
   const h = new Date().getHours();

@@ -48,6 +48,7 @@ NARR = {s["id"]: s for s in json.load(open("scripts/video/narration.json"))["sce
 GAP_S = 5.0
 MAX_SILENCE_S = 4.8   # silences still longer than this after explanations are shortened
 KEEP_SILENCE_S = 2.0  # to this many seconds
+STATIC_FRAME_S = 1.5  # a frame held longer than this counts as a still screen
 GAP_DIR = os.path.abspath("video-build/gap-narration")
 os.makedirs(GAP_DIR, exist_ok=True)
 ENV = {}
@@ -117,29 +118,43 @@ def silent_gaps(samples, min_s):
     return gaps
 
 
-def fill_gaps(pcm_bytes, notes):
-    """Mix an explanation into every silence > GAP_S that it fits, using the latest note before the gap."""
+def fill_gaps(pcm_bytes, notes, extra=()):
+    """Mix an explanation into every silence > GAP_S that it fits: first the recorded note for that moment,
+    then the scene's extra lines in order. Long silences can take several lines; nothing talks over the
+    seller or the agent."""
     samples = array.array("h", bytes(pcm_bytes))
     used = set()
     placed = 0
-    for gs, ge in silent_gaps(samples, GAP_S):
-        cands = [n for n in notes if n[1] not in used and n[0] <= gs + 1.5]
-        if not cands:
-            cands = [n for n in notes if n[1] not in used and gs <= n[0] <= ge]
-        if not cands:
-            continue
-        ot, text = max(cands, key=lambda n: n[0]) if any(n[0] <= gs + 1.5 for n in cands) else min(cands, key=lambda n: n[0])
-        line = tts_line(text)
-        if line is None:
-            continue
-        start = int((gs + 0.5) * RATE)
-        if start + len(line) > int((ge - 0.3) * RATE):
-            continue  # does not fit this silence; never talk over the seller or the agent
-        for k, v in enumerate(line):
-            x = samples[start + k] + v
-            samples[start + k] = 32767 if x > 32767 else -32768 if x < -32768 else x
-        used.add(text)
-        placed += 1
+    spare = list(extra)
+    for _ in range(6):  # repeat: a long silence may still be > GAP_S after one line
+        progress = False
+        for gs, ge in silent_gaps(samples, GAP_S):
+            cands = [n for n in notes if n[1] not in used and n[0] <= gs + 1.5]
+            if not cands:
+                cands = [n for n in notes if n[1] not in used and gs <= n[0] <= ge]
+            text = None
+            if cands:
+                text = (max(cands, key=lambda n: n[0]) if any(n[0] <= gs + 1.5 for n in cands) else min(cands, key=lambda n: n[0]))[1]
+            line = tts_line(text) if text else None
+            start = int((gs + 0.5) * RATE)
+            if line is None or start + len(line) > int((ge - 0.3) * RATE):
+                text, line = None, None
+                for cand in spare:
+                    l = tts_line(cand)
+                    if l is not None and start + len(l) <= int((ge - 0.3) * RATE):
+                        text, line = cand, l
+                        break
+                if line is None:
+                    continue
+                spare.remove(text)
+            for k, v in enumerate(line):
+                x = samples[start + k] + v
+                samples[start + k] = 32767 if x > 32767 else -32768 if x < -32768 else x
+            used.add(text)
+            placed += 1
+            progress = True
+        if not progress:
+            break
     return samples.tobytes(), placed
 
 
@@ -317,7 +332,8 @@ def build_scene(r, sid, index):
             continue
         pcm += chunk if sp == 1.0 else b"\x00" * (int((e2 - s) / sp) // 2 * 2)
     notes = [(out_time(e["t"]), e["text"]) for e in ev if e["type"] == "explain"]
-    filled, placed = fill_gaps(pcm, notes) if notes else (bytes(pcm), 0)
+    extra = NARR.get(sid, {}).get("fill", [])
+    filled, placed = fill_gaps(pcm, notes, extra) if (notes or extra) else (bytes(pcm), 0)
     cut = os.path.join(WORK, f"{index:02d}-{sid}-audio.wav")
     with wave.open(cut, "wb") as w:
         w.setnchannels(1)
@@ -330,7 +346,6 @@ def build_scene(r, sid, index):
     # Overlays: scene title for 4 s, "sped up" label, disclosure line.
     title = NARR.get(sid, {}).get("title", sid)
     draws = [
-        "drawtext=fontfile=" + FONT_BOLD + f":text='{esc(title)}':fontcolor=white:fontsize=40:box=1:boxcolor=0x1d1712@0.82:boxborderw=22:x=56:y=h-160:enable='between(t,0.3,4.3)'",
         "drawtext=fontfile=" + FONT + ":text='Live recording · seller voice\\: real · agent\\: Gemini Live, unedited · narration\\: Gemini TTS':fontcolor=white@0.85:fontsize=18:box=1:boxcolor=black@0.45:boxborderw=8:x=w-tw-24:y=h-40",
     ]
     for a, b, sp in cuts:
@@ -347,25 +362,48 @@ def build_scene(r, sid, index):
     ])
     # Shorten any silence still longer than MAX_SILENCE_S (page loads, long scrolls) to KEEP_SILENCE_S.
     keep_gaps = silent_gaps(array.array("h", filled), MAX_SILENCE_S)
-    if keep_gaps:
+    # Only cut where the screen is ALSO still: a single frame held for a while (page loads, idle waits).
+    # Silent stretches with movement (scrolling, clicks, steps appearing) are kept in full.
+    static, t_out = [], 0.0
+    for _, dur in entries:
+        if dur > STATIC_FRAME_S:
+            static.append((t_out, t_out + dur))
+        t_out += dur
+    cuts_out = []
+    for gs, ge in keep_gaps:
+        for sa, sb in static:
+            a_, b_ = max(gs, sa) + 0.6, min(ge, sb) - 0.4
+            if b_ - a_ > 0.5:
+                cuts_out.append((a_, b_))
+    # Dead time at a scene's edges (navigation before the narration, waiting after the last sound): keep 1 s / 1.5 s.
+    smp = array.array("h", filled)
+    loud = [i / 10 for i in range(0, int(total * 10)) if max((abs(x) for x in smp[int(i / 10 * RATE):int(i / 10 * RATE) + RATE // 10][::16]), default=0) > 1200]
+    if loud:
+        if loud[0] > 1.2:
+            cuts_out.append((0.2, loud[0] - 1.0))
+        if total - loud[-1] > 2.0:
+            cuts_out.append((loud[-1] + 1.5, total - 0.05))
+    cuts_out.sort()
+    title_draw = "drawtext=fontfile=" + FONT_BOLD + f":text='{esc(title)}':fontcolor=white:fontsize=40:box=1:boxcolor=0x1d1712@0.82:boxborderw=22:x=56:y=h-160:enable='between(t,0.3,4.3)'"
+    if True:  # final pass: trims (if any) and the scene title, drawn on the trimmed clip
         keep, cursor_s = [], 0.0
-        for gs, ge in keep_gaps:
-            cut_a, cut_b = gs + KEEP_SILENCE_S / 2, ge - KEEP_SILENCE_S / 2
-            if cut_b - cut_a > 0.3:
+        for cut_a, cut_b in cuts_out:
+            if cut_a > cursor_s:
                 keep.append((cursor_s, cut_a))
-                cursor_s = cut_b
+            cursor_s = max(cursor_s, cut_b)
         keep.append((cursor_s, total))
         keep = [(x, y) for x, y in keep if y - x > 0.05]
         parts = []
         for i, (x, y) in enumerate(keep):
             parts.append(f"[0:v]trim=start={x:.3f}:end={y:.3f},setpts=PTS-STARTPTS[v{i}];[0:a]atrim=start={x:.3f}:end={y:.3f},asetpts=PTS-STARTPTS[a{i}]")
-        graph = ";".join(parts) + ";" + "".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[v][a]"
+        graph = ";".join(parts) + ";" + "".join(f"[v{i}][a{i}]" for i in range(len(keep))) + f"concat=n={len(keep)}:v=1:a=1[vc][a];[vc]{title_draw}[v]"
         trimmed = clip.replace(".mp4", "-trim.mp4")
         run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", clip, "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
              "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", str(FPS), "-c:a", "aac", "-b:a", "192k", "-ar", str(RATE), "-ac", "2", trimmed])
         os.replace(trimmed, clip)
         total = sum(y - x for x, y in keep)
-        print(f"    {sid}: shortened {len(keep_gaps)} long silence(s)")
+        if cuts_out:
+            print(f"    {sid}: trimmed {len(cuts_out)} still/dead stretch(es)")
     print(f"  {sid}: {total:.1f}s from {os.path.basename(r.path)}")
     return clip
 

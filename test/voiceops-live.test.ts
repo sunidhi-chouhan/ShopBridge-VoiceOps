@@ -226,4 +226,33 @@ describe("VoiceOps Live relay with a fake Gemini", { skip: available ? false : P
     assert.ok(rows.every((r) => r.ended_at));
     assert.ok(rows.some((r) => r.latencies.length > 0));
   });
+  it("hold-to-talk: no automatic detection, audio only inside a held turn, and an empty hold sends nothing", async () => {
+    const port = (http.address() as AddressInfo).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/voiceops/live?mode=ptt`, { headers: { cookie: "sid=ok" } });
+    const events: any[] = [];
+    ws.on("message", (d, bin) => { if (!bin) events.push(JSON.parse(d.toString())); });
+    await new Promise<void>((res, rej) => { ws.on("open", () => res()); ws.on("error", rej); });
+    const wait = async (pred: () => boolean, ms = 3000) => { const end = Date.now() + ms; while (Date.now() < end && !pred()) await new Promise((r) => setTimeout(r, 20)); };
+    await wait(() => events.some((e) => e.type === "ready"));
+    assert.equal(events.find((e) => e.type === "ready").mode, "ptt");
+    const setup = [...geminiSaw].reverse().find((m) => m.setup);
+    assert.deepEqual(setup.setup.realtimeInputConfig, { automaticActivityDetection: { disabled: true } });
+    const from = geminiSaw.length;
+    const loud = Buffer.alloc(3200);
+    for (let i = 0; i < 1600; i++) loud.writeInt16LE(i % 2 ? 3000 : -3000, i * 2);
+
+    ws.send(loud, { binary: true }); // background noise while the button is up: dropped
+    ws.send(JSON.stringify({ type: "activity_start" }));
+    ws.send(JSON.stringify({ type: "activity_end" })); // empty hold: Gemini would close the session
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(geminiSaw.slice(from).filter((m) => m.realtimeInput).length, 0, "nothing reaches Gemini");
+
+    ws.send(JSON.stringify({ type: "activity_start" }));
+    ws.send(loud, { binary: true });
+    ws.send(JSON.stringify({ type: "activity_end" }));
+    await wait(() => geminiSaw.slice(from).some((m) => m.realtimeInput?.activityEnd));
+    const order = geminiSaw.slice(from).filter((m) => m.realtimeInput).map((m) => Object.keys(m.realtimeInput)[0]);
+    assert.deepEqual(order, ["activityStart", "audio", "activityEnd"]);
+    ws.close();
+  });
 });

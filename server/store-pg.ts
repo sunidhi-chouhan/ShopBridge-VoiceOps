@@ -1478,7 +1478,7 @@ export async function reseedDemo(): Promise<{ backup: string | null }> {
   const passwordHash = await hashPassword(demoPassword());
   await tx(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock($1)", [RESET_LOCK_KEY]);
-    await client.query("TRUNCATE cart_items, order_items, requests, orders, products, sessions, users");
+    await client.query("TRUNCATE shipment_events, refunds, purchase_orders, supplier_products, suppliers, copilot_alerts, copilot_scans, copilot_insights, cart_items, order_items, requests, orders, products, sessions, users");
   });
   const { attachChannels } = await import("./demo-seed");
   const plan = attachChannels(buildDemoPlan(users), (orderId) => `order${orderId}`);

@@ -49,15 +49,19 @@ export function parseDemoParty(value: unknown): DemoParty {
 }
 
 /**
- * Client address for rate limiting: the left-most X-Forwarded-For entry (the original
- * client as reported through Render's proxy). A client can forge it to dodge the limit,
- * but using a proxy-side hop instead risks putting every visitor in one shared bucket,
- * which would lock judges out — availability wins for this deployment.
+ * Client address for rate limiting.
+ * On Cloud Run (K_SERVICE is set) Google's front end appends the real client address as the LAST
+ * X-Forwarded-For entry, so that one cannot be forged. Elsewhere (Render, local) the left-most entry is
+ * used: a client can forge it, but a proxy-side hop would put every visitor in one bucket and lock
+ * judges out, so availability wins there.
  */
-export function clientKey(req: IncomingMessage): string {
+export function clientKey(req: IncomingMessage, env: NodeJS.ProcessEnv = process.env): string {
   const forwarded = req.headers["x-forwarded-for"];
-  const header = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  if (typeof header === "string" && header.trim()) return header.split(",")[0].trim();
+  const header = Array.isArray(forwarded) ? forwarded.join(",") : forwarded;
+  if (typeof header === "string" && header.trim()) {
+    const hops = header.split(",").map((h) => h.trim()).filter(Boolean);
+    if (hops.length) return env.K_SERVICE ? hops[hops.length - 1] : hops[0];
+  }
   return req.socket.remoteAddress || "unknown";
 }
 

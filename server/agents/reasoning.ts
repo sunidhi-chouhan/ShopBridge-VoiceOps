@@ -36,11 +36,14 @@ export type Facts = {
   order?: OrderFacts | null;
   product?: ProductFacts | null;
   delayedCount?: number;
+  forecast?: { status: string; reason: string; suggested_qty: number; supplier: string | null; unit_cost: number; min_order_qty: number } | null;
+  shipment?: { stuck: boolean; reason: string; courier: string; awb: string } | null;
+  refunded?: boolean;
   args: Record<string, unknown>;
 };
 
-const READ_TOOLS = new Set(["business_summary", "list_orders", "get_order", "list_low_stock", "run_agent_team"]);
-const ESCALATE_CODES = new Set(["OUT_OF_POLICY", "OFFER_TOO_DEEP", "RETURN_WINDOW_CLOSED"]);
+const READ_TOOLS = new Set(["business_summary", "list_orders", "get_order", "list_low_stock", "run_agent_team", "copilot_briefing", "forecast_stock", "sla_risk", "track_shipment", "chat_insights", "list_purchase_orders"]);
+const ESCALATE_CODES = new Set(["OUT_OF_POLICY", "OFFER_TOO_DEEP", "RETURN_WINDOW_CLOSED", "REFUND_TOO_HIGH"]);
 const inr = (n: number) => `INR ${Math.round(n).toLocaleString("en-IN")}`;
 const fromVerdict = (rule: string, v: policy.Verdict, passDetail: string, hard = true): Check & { code?: string } =>
   v.ok ? { rule, passed: true, detail: passDetail, hard } : { rule, passed: false, detail: v.message, hard, code: v.code };
@@ -135,6 +138,32 @@ export function buildTrace(tool: string, facts: Facts): Trace {
         factList.push({ label: "Discount", value: base ? `${Math.round((1 - amount / base) * 100)}% off ${inr(base)}` : "unknown base" });
         checks.push(fromVerdict("Before dispatch, lower price, at most 50% off, one open offer", policy.offerEligibility(o.status, base, amount, o.offer_state ?? null), `${inr(base)} → ${inr(amount)}.`));
       }
+      break;
+    }
+    case "create_purchase_order": {
+      const f = facts.forecast;
+      const qty = a.quantity === undefined || a.quantity === null || a.quantity === "" ? f?.suggested_qty ?? 0 : Number(a.quantity);
+      intent = `Order ${qty} × ${facts.product?.name ?? "a product"} from the supplier`;
+      if (f) {
+        factList.push({ label: "Forecast", value: f.reason });
+        factList.push({ label: "Supplier", value: f.supplier ? `${f.supplier} · ${inr(f.unit_cost)} each · minimum ${f.min_order_qty}` : "none set up" });
+        checks.push(fromVerdict("Supplier, quantity and value within policy", policy.purchaseOrderCheck(qty, f.unit_cost, f.min_order_qty, Boolean(f.supplier)), `${qty} pieces, ${inr(qty * f.unit_cost)}.`));
+        checks.push({ rule: "Forecast supports a restock", passed: f.status === "critical" || f.status === "warning", detail: f.status === "critical" || f.status === "warning" ? `Forecast is ${f.status}; suggested ${f.suggested_qty}.` : "The forecast says stock covers demand; check before ordering more.", hard: false });
+      }
+      break;
+    }
+    case "reroute_shipment": {
+      const sh = facts.shipment;
+      intent = `Re-book order ${o?.order_no} with ${a.courier ? String(a.courier) : "another courier"}`;
+      if (sh) factList.push({ label: "Tracking", value: `${sh.courier} ${sh.awb}: ${sh.reason}` });
+      if (o) checks.push(fromVerdict("Shipped and tracking shows it stuck", policy.rerouteEligibility(o.status as never, Boolean(sh?.stuck)), sh?.reason ?? "Parcel is stuck."));
+      break;
+    }
+    case "issue_refund": {
+      const amount = a.amount === undefined || a.amount === null || a.amount === "" ? o?.total ?? 0 : Number(a.amount);
+      intent = `Refund ${inr(amount)} on order ${o?.order_no}`;
+      if (o) checks.push(fromVerdict(`Delivered, within ${policy.REFUND_WINDOW_DAYS} days, at most the amount paid, not refunded before`, policy.refundEligibility(o.status as never, o.total, amount, o.updated_at ?? o.created_at, Boolean(facts.refunded)), `${inr(amount)} of ${inr(o.total)} paid.`));
+      checks.push({ rule: "Money is simulated in this prototype", passed: true, detail: "The refund is recorded and the buyer is told; no payment is moved.", hard: false });
       break;
     }
     case "request_human_review": {

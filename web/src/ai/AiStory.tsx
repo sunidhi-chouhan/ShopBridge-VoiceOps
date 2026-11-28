@@ -134,7 +134,7 @@ const PAGES: Page[] = [
     n: "06",
     tag: "It asks first",
     title: "Read back. Then your yes.",
-    body: <>Nothing changes until the seller agrees. The agent reads the exact action aloud. A spoken “haan” is checked against what the server itself heard, not what the model claims, or the seller can simply tap.</>,
+    body: <>Nothing changes until the seller agrees. The agent reads the exact action aloud. A spoken “haan” is checked against what the server itself heard, not what the model claims, or the seller can simply tap. Critical actions (refunds, cancellations, price offers, purchases of ₹25,000 or more, stock changes of 100+ units, messages to 10+ customers) need a tap: a spoken yes is refused.</>,
     art: (
       <div className="ai-approval">
         <p className="ai-approval-k">Waiting for your OK</p>

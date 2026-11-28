@@ -339,6 +339,47 @@ scene("s05_interrupt", async () => {
   await sleep(3500);
 });
 
+scene("s16_team", async () => {
+  await voiceTab(seller, "Agent network");
+  await sleep(1500);
+  await hold("s16_team");
+  await click(seller, "button", "Run the team");
+  explain("The operations monitor scans the shop, and the Supervisor asks Gemini to plan which agent acts first.");
+  // Wait for THIS run: it must start ("Running now"), then finish with its summary step.
+  await waitFor(seller, `/Running now/.test(document.querySelector('.an-status')?.textContent ?? "")`, 15000, "team run started");
+  await fast(() => waitFor(seller, `!/Running now/.test(document.querySelector('.an-status')?.textContent ?? "") && [...document.querySelectorAll('.an-step')].some((s) => s.classList.contains('is-summary'))`, 240000, "team run finished"));
+  await sleep(1500);
+  explain("Each specialist's proposal goes to the reasoning engine. Its checks appear under every decision, and each one waits for Meera.");
+  for (let i = 0; i < 6; i++) { await smoothScroll(seller, null, 600, 1600); await sleep(1200); }
+  const approved = await seller.eval(`
+    const step = [...document.querySelectorAll('.an-step')].find((s) => /stock from/.test(s.textContent) && [...s.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Approve'))
+      || [...document.querySelectorAll('.an-step')].find((s) => [...s.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Approve'));
+    const btn = step && [...step.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Approve');
+    if (!btn) return false; btn.scrollIntoView({ block: "center", behavior: "smooth" }); await new Promise((r) => setTimeout(r, 900)); btn.click(); return true;`);
+  if (approved) {
+    await waitFor(seller, `/approved and done/.test(document.body.innerText)`, 25000, "team approval done");
+    explain("Approved with one tap. The change is made, and the step now shows it as approved and done.");
+  }
+  await sleep(4000);
+}, async () => { setCamera("seller"); await signIn(seller, "seller"); await goto(seller, "#/voice"); });
+
+scene("s17_why", async () => {
+  await voiceTab(seller, "Voice agent");
+  await sleep(1000);
+  await hold("s17_why");
+  await click(seller, "button", "Start talking");
+  await waitFor(seller, `document.querySelector('.vo-turn.is-agent')`, 30000, "briefing");
+  await waitAgentIdle(seller, 40000);
+  await say(seller, "04_cancel_1050");
+  await waitFor(seller, `document.querySelector('.trace .trace-verdict.is-bad')`, 30000, "blocked trace");
+  explain("Blocked by the rule: not yet dispatched. The Why panel lists the order's facts and the check that failed.");
+  await waitAgentIdle(seller);
+  await seller.eval(`document.querySelector('.trace .trace-verdict.is-bad')?.closest('.vo-card')?.scrollIntoView({ block: "center", behavior: "smooth" });`);
+  await sleep(6000);
+  await click(seller, "button", "End session");
+  await sleep(1000);
+});
+
 scene("s06_noise", async () => {
   await hold("s06_noise");
   const n = await readbacks(seller);
