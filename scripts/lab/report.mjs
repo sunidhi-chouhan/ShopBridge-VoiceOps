@@ -17,7 +17,10 @@ const RATE_OUT = Number(process.env.GEMINI_COST_OUT_PER_MIN ?? 0.018);
 const USD_INR = Number(process.env.USD_INR ?? 84);
 
 const runs = files.map((f) => JSON.parse(readFileSync(f, "utf8")));
-const rows = runs.flatMap((r) => r.results).filter((r) => !r.skipped);
+// A case re-run in a later file (for example after an interrupted run) replaces the earlier result.
+const latest = new Map();
+for (const run of runs) for (const r of run.results) if (!r.skipped) latest.set(`${run.meta.mode ?? "auto"}|${r.id}|${r.cond}|${r.rep}`, r);
+const rows = [...latest.values()];
 const skipped = runs.flatMap((r) => r.results).filter((r) => r.skipped);
 
 const pct = (xs, p) => { const s = xs.filter((x) => Number.isFinite(x)).sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))] : null; };
@@ -40,6 +43,8 @@ for (const [k, v] of group((r) => r.cond)) {
   lines.push(`| ${COND[k] ?? k} | ${rate(v)} | ${ms(pct(lat, 50))} | ${ms(pct(lat, 95))} | ${lat.length} |`);
 }
 const allLat = rows.map((r) => r.latency_ms).filter((x) => x !== null && x !== undefined);
+const rel = rows.map((r) => r.latency_from_release_ms).filter((x) => x !== null && x !== undefined);
+if (rel.length) lines.push(`| Hold-to-talk, from button release | | ${ms(pct(rel, 50))} | ${ms(pct(rel, 95))} | ${rel.length} |`);
 lines.push(`| **All** | **${rate(rows)}** | **${ms(pct(allLat, 50))}** | **${ms(pct(allLat, 95))}** | ${allLat.length} |`, "");
 const sub = allLat.filter((x) => x < 1000).length;
 const executedWrong = rows.filter((r) => r.outcome === "wrong_execution");

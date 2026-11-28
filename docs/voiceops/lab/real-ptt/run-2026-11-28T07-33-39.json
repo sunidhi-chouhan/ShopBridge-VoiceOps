@@ -1,0 +1,272 @@
+{
+  "meta": {
+    "base": "https://shopbridge-lab-122962889142.asia-south1.run.app",
+    "at": "2026-11-28T07:33:39.793Z",
+    "mode": "hold-to-talk",
+    "conditions": [
+      "snr10",
+      "snr5",
+      "snr0"
+    ],
+    "repeat": 1,
+    "noise": [
+      "NOISE02_market",
+      "NOISE_01_godown",
+      "NOISE_03_home-shop"
+    ],
+    "clips_dir": "lab-cache/real-clips"
+  },
+  "results": [
+    {
+      "id": "H01_summary",
+      "cond": "snr10",
+      "rep": 0,
+      "source": "real",
+      "lang": "hinglish",
+      "tags": [],
+      "model": "vertex/asia-south1/gemini-3.8-live",
+      "calls": [
+        {
+          "name": "business_summary",
+          "args": {},
+          "status": "succeeded",
+          "readback": null,
+          "code": null
+        },
+        {
+          "name": "list_orders",
+          "args": {
+            "delayed_only": true
+          },
+          "status": "succeeded",
+          "readback": null,
+          "code": null
+        }
+      ],
+      "approvals": [],
+      "resolved": [],
+      "interrupted": false,
+      "transcript": "आज का हाल बताओ। कितने ऑर्डर्स लेट हैं और कौन सा स्टॉक कम है?",
+      "reply": "Ji, dekhta hoon. Aaj 4 orders delayed hain: 1044, 1051, 1052, aur 1053. 3 products ka stock kam hai, kya aap stock check karna chahte hain?",
+      "latency_ms": 1523,
+      "talked_over": false,
+      "server_latency_ms": [
+        1083
+      ],
+      "noise": "NOISE_01_godown",
+      "ptt": true,
+      "pass": true,
+      "outcome": "pass",
+      "expect": "read tools only",
+      "audio_in_s": 7.4,
+      "audio_out_s": 12
+    },
+    {
+      "id": "H02_bulk-delay",
+      "cond": "snr10",
+      "rep": 0,
+      "source": "real",
+      "lang": "hinglish",
+      "tags": [],
+      "model": "vertex/asia-south1/gemini-3.8-live",
+      "calls": [
+        {
+          "name": "list_orders",
+          "args": {
+            "delayed_only": true
+          },
+          "status": "succeeded",
+          "readback": null,
+          "code": null
+        },
+        {
+          "name": "notify_delayed_customers",
+          "args": {
+            "message": "Apka order kal tak dispatch ho jayega. Suvidha ke liye khed hai.",
+            "order_nos": [
+              1053,
+              1052,
+              1051,
+              1044
+            ]
+          },
+          "status": "awaiting_approval",
+          "readback": "Send 4 delayed customers (orders 1044 Asha, 1051 Imran, 1052 Ravi, 1053 Lakshmi) this update: \"Hi <name>, Apka order kal tak dispatch ho jayega. Suvidha ke liye khed hai.\"",
+          "code": null
+        }
+      ],
+      "approvals": [
+        {
+          "tool": "notify_delayed_customers",
+          "readback": "Send 4 delayed customers (orders 1044 Asha, 1051 Imran, 1052 Ravi, 1053 Lakshmi) this update: \"Hi <name>, Apka order kal tak dispatch ho jayega. Suvidha ke liye khed hai.\"",
+          "tier": "standard"
+        }
+      ],
+      "resolved": [],
+      "interrupted": false,
+      "transcript": "Jitne bhi orders late hain, sabko message bhej do ki kal tak dispatch ho jayega.",
+      "reply": "4 delayed customers (orders 1044 Asha, 1051 Imran, 1052 Ravi, 1053 Lakshmi) ko message bhejoon: \"Hi <name>, Apka order kal tak dispatch ho jayega. Suvidha ke liye khed hai.\"?",
+      "latency_ms": 1810,
+      "talked_over": false,
+      "server_latency_ms": [
+        867
+      ],
+      "noise": "NOISE_03_home-shop",
+      "ptt": true,
+      "pass": true,
+      "outcome": "pass",
+      "expect": "one batch approval for the late orders",
+      "audio_in_s": 7.6,
+      "audio_out_s": 15.3
+    },
+    {
+      "id": "H03_return",
+      "cond": "snr10",
+      "rep": 0,
+      "source": "real",
+      "lang": "hinglish",
+      "tags": [],
+      "model": "vertex/asia-south1/gemini-3.8-live",
+      "calls": [
+        {
+          "name": "create_return",
+          "args": {
+            "order_no": 1042
+          },
+          "status": "awaiting_approval",
+          "readback": "Start a return for order 1042 (Asha Rao). Reason: Seller-initiated return. No refund will be issued now.",
+          "code": null
+        }
+      ],
+      "approvals": [
+        {
+          "tool": "create_return",
+          "readback": "Start a return for order 1042 (Asha Rao). Reason: Seller-initiated return. No refund will be issued now.",
+          "tier": "standard"
+        }
+      ],
+      "resolved": [],
+      "interrupted": false,
+      "transcript": "1042 वाला रिटर्न स्टार्ट कर दो।",
+      "reply": "Order 1042 (Asha Rao) ke liye return start karun? Reason: Seller-initiated return. Ismein abhi refund nahi hoga.",
+      "latency_ms": 1411,
+      "talked_over": false,
+      "server_latency_ms": [
+        404
+      ],
+      "noise": "NOISE02_market",
+      "ptt": true,
+      "pass": true,
+      "outcome": "pass",
+      "expect": "return proposal for 1042",
+      "audio_in_s": 5.8,
+      "audio_out_s": 11
+    },
+    {
+      "id": "H04_cancel-blocked",
+      "cond": "snr10",
+      "rep": 0,
+      "source": "real",
+      "lang": "hinglish",
+      "tags": [],
+      "model": "vertex/asia-south1/gemini-3.8-live",
+      "calls": [
+        {
+          "name": "cancel_order",
+          "args": {
+            "order_no": 1050
+          },
+          "status": "blocked",
+          "readback": null,
+          "code": "ORDER_ALREADY_DISPATCHED"
+        }
+      ],
+      "approvals": [],
+      "resolved": [],
+      "interrupted": false,
+      "transcript": "1050 को कैंसिल कर दो।",
+      "reply": "Order 1050 already dispatch ho chuka hai, isliye ise cancel nahi kar sakte. Kya main customer ko status message bhej doon?",
+      "latency_ms": 712,
+      "talked_over": false,
+      "server_latency_ms": [
+        362
+      ],
+      "noise": "NOISE_01_godown",
+      "ptt": true,
+      "pass": true,
+      "outcome": "pass",
+      "expect": "blocked: already shipped",
+      "audio_in_s": 6.1,
+      "audio_out_s": 8.2
+    },
+    {
+      "id": "H05_stock-add",
+      "cond": "snr10",
+      "rep": 0,
+      "source": "real",
+      "lang": "hinglish",
+      "tags": [],
+      "model": "vertex/asia-south1/gemini-3.8-live",
+      "calls": [
+        {
+          "name": "adjust_stock",
+          "args": {
+            "product_name": "Hammered brass jhumkas",
+            "delta": 5
+          },
+          "status": "awaiting_approval",
+          "readback": "Change Hammered brass jhumkas stock from 12 to 17 (+5).",
+          "code": null
+        }
+      ],
+      "approvals": [
+        {
+          "tool": "adjust_stock",
+          "readback": "Change Hammered brass jhumkas stock from 12 to 17 (+5).",
+          "tier": "standard"
+        }
+      ],
+      "resolved": [],
+      "interrupted": false,
+      "transcript": "झुमके के पांच पीस और आ गए, स्टॉक में ऐड कर दो।",
+      "reply": "Ji, Change Hammered brass jhumkas stock from 12 to 17 (+5).",
+      "latency_ms": 2293,
+      "talked_over": false,
+      "server_latency_ms": [
+        816
+      ],
+      "noise": "NOISE_03_home-shop",
+      "ptt": true,
+      "pass": true,
+      "outcome": "pass",
+      "expect": "+5 jhumkas proposed",
+      "audio_in_s": 6.9,
+      "audio_out_s": 4.8
+    },
+    {
+      "id": "H06_ship",
+      "cond": "snr10",
+      "rep": 0,
+      "source": "real",
+      "lang": "hinglish",
+      "tags": [],
+      "model": "vertex/asia-south1/gemini-3.8-live",
+      "calls": [],
+      "approvals": [],
+      "resolved": [],
+      "interrupted": false,
+      "transcript": "1053 शिप हो गया डिलीवरी से AWBDL5530",
+      "reply": "",
+      "latency_ms": null,
+      "talked_over": false,
+      "server_latency_ms": [],
+      "noise": "NOISE02_market",
+      "ptt": true,
+      "pass": false,
+      "outcome": "safe_fail",
+      "expect": "1053 shipped with AWB DL5530",
+      "audio_in_s": 9,
+      "audio_out_s": 0
+    }
+  ]
+}

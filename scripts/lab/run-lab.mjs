@@ -38,8 +38,12 @@ let tokenAt = Date.now();
 const refreshToken = () => {
   if (process.env.LAB_AUTH !== "gcloud") return;
   if (token && Date.now() - tokenAt < 30 * 60_000) return;
-  token = execFileSync(process.env.GCLOUD_BIN || "gcloud", ["auth", "print-identity-token"]).toString().trim();
-  tokenAt = Date.now();
+  try {
+    token = execFileSync(process.env.GCLOUD_BIN || "gcloud", ["auth", "print-identity-token"]).toString().trim();
+    tokenAt = Date.now();
+  } catch (error) {
+    if (!token) throw error; // keep the current token and try again on the next call
+  }
 };
 refreshToken();
 const auth = () => { refreshToken(); return token ? { Authorization: `Bearer ${token}` } : {}; };
@@ -183,6 +187,7 @@ class Session {
   constructor(cookie) {
     this.events = []; this.frames = []; this.sent = 0; this.recvBytes = 0;
     this.ws = new WebSocket(BASE.replace(/^http/, "ws") + "/api/voiceops/live" + (PTT ? "?mode=ptt" : ""), { headers: { cookie, origin: BASE, ...auth() } });
+    this.ws.on("error", (e) => this.events.push({ type: "error", message: `socket: ${e.message}`, at: Date.now() }));
     this.ws.on("message", (d, bin) => {
       if (bin) { this.frames.push(Date.now()); this.recvBytes += d.length; return; }
       const e = JSON.parse(d.toString()); e.at = Date.now(); this.events.push(e);
@@ -219,9 +224,10 @@ async function speak(s, clip, cond, k) {
   if (PTT) s.ws.send(JSON.stringify({ type: "activity_start" }));
   // "end" = when the seller's last voiced sound left the client (measured on the clean clip).
   const end = await s.stream(speech, voicedEnd(clip.pcm));
+  const released = Date.now(); // hold-to-talk: the moment the button is let go
   if (PTT) s.ws.send(JSON.stringify({ type: "activity_end" }));
   await s.stream(tail);
-  return { start, end, noise };
+  return { start, end, noise, released };
 }
 
 /**
@@ -267,9 +273,25 @@ function collect(s, from, speechEnd, speechStart) {
 const login = await fetch(`${BASE}/api/demo`, { method: "POST", headers: { "Content-Type": "application/json", ...auth() }, body: JSON.stringify({ account: "seller" }) });
 const cookie = (login.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]).join("; ");
 if (!login.ok || !cookie) { console.error(`Sign-in failed (${login.status}).`); process.exit(1); }
-const post = (p) => fetch(BASE + p, { method: "POST", headers: { "Content-Type": "application/json", cookie, origin: BASE, ...auth() }, body: "{}" });
+/** POST with retries: a dropped connection must not end an hour-long run. */
+async function post(p, tries = 5) {
+  for (let i = 1; ; i++) {
+    try {
+      return await fetch(BASE + p, { method: "POST", headers: { "Content-Type": "application/json", cookie, origin: BASE, ...auth() }, body: "{}" });
+    } catch (error) {
+      if (i >= tries) throw error;
+      console.error(`network error on ${p} (${error instanceof Error ? error.message : error}); retry ${i}/${tries - 1}`);
+      await sleep(3000 * i);
+    }
+  }
+}
 const byId = new Map(CASES.map((c) => [c.id, c]));
 
+mkdirSync(OUT, { recursive: true });
+const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+const meta = { base: BASE, at: new Date().toISOString(), mode: PTT ? "hold-to-talk" : "automatic turn detection", conditions: CONDITIONS, repeat: REPEAT, noise: noiseBeds.length ? noiseBeds.map((b) => b.name) : ["synthetic godown mix"], clips_dir: CLIPS };
+const file = path.join(OUT, `run-${stamp}.json`);
+const save = () => writeFileSync(file, JSON.stringify({ meta, results }, null, 2));
 const results = [];
 let k = 0;
 for (const cond of CONDITIONS) {
@@ -281,7 +303,12 @@ for (const cond of CONDITIONS) {
       const main = await clipFor(c.clip ?? c.id, c.text, cond === "live");
       const pre = c.after ? await clipFor(byId.get(c.after).clip ?? c.after, byId.get(c.after).text) : null;
       if (!main || (c.after && !pre)) { results.push({ id: c.id, cond, rep, skipped: "no recording" }); continue; }
-      const reset = await post("/api/voiceops/demo/reset");
+      let reset;
+      try { reset = await post("/api/voiceops/demo/reset"); } catch (error) {
+        results.push({ id: c.id, cond, rep, skipped: `network: ${error instanceof Error ? error.message : error}` });
+        save();
+        continue;
+      }
       if (!reset.ok) { console.error(`Demo reset failed (${reset.status}); is VOICEOPS demo enabled?`); process.exit(1); }
       const s = new Session(cookie);
       const r0 = { id: c.id, cond, rep, source: main.source, lang: c.lang, tags: c.tags ?? [] };
@@ -300,9 +327,10 @@ for (const cond of CONDITIONS) {
           }
         }
         const from = s.events.length;
-        const { start, end, noise } = await speak(s, main, cond === "live" ? "clean" : cond, k);
+        const { start, end, noise, released } = await speak(s, main, cond === "live" ? "clean" : cond, k);
         await s.settle(4000, 45000);
         const r = collect(s, from, end, start);
+        if (PTT) r.latency_from_release_ms = replyLatency(s.frames, start, released).latency;
         const verdict = c.check(r);
         // A failure is "safe" when the agent proposed and executed nothing (it asked, refused or looked something up).
         // Failures: "wrong_execution" changed data, "wrong_proposal" only raised an approval (nothing changed), "safe_fail" did neither.
@@ -316,14 +344,11 @@ for (const cond of CONDITIONS) {
       r0.audio_out_s = Math.round((s.recvBytes / 2 / 24000) * 10) / 10;
       await s.close();
       results.push(r0);
+      save(); // after every case, so an interrupted run keeps what it measured
       console.log(`${r0.pass ? "PASS" : r0.skipped ? "SKIP" : "FAIL"} ${cond.padEnd(6)} ${c.id.padEnd(22)} ${String(r0.latency_ms ?? "-").padStart(5)} ms  heard: ${(r0.transcript ?? "").slice(0, 70)}${r0.error ? `  ERROR ${r0.error}` : ""}`);
     }
   }
 }
 
-mkdirSync(OUT, { recursive: true });
-const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-const meta = { base: BASE, at: new Date().toISOString(), mode: PTT ? "hold-to-talk" : "automatic turn detection", conditions: CONDITIONS, repeat: REPEAT, noise: noiseBeds.length ? noiseBeds.map((b) => b.name) : ["synthetic godown mix"], clips_dir: CLIPS };
-const file = path.join(OUT, `run-${stamp}.json`);
-writeFileSync(file, JSON.stringify({ meta, results }, null, 2));
+save();
 console.log(`\nSaved ${file}. Build the report with: node scripts/lab/report.mjs ${file}`);
